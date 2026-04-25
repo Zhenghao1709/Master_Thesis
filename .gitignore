@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Large data
+data/raw/**
+data/interim/**
+data/processed/**
+
+# Keep README placeholders
+!data/
+!data/raw/
+!data/raw/README.md
+!data/interim/
+!data/interim/README.md
+!data/processed/
+!data/processed/README.md
+
+# Models
+models/**/*.pth
+models/**/*.pkl
+models/**/*.pt
+models/**/*.ckpt
+
+# Generated results
+results/kelmarsh/logs/**
+
+
+# Heavy artifacts
+*.parquet
+
+# System/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Secrets
+.env
+*.key
+*.pem
