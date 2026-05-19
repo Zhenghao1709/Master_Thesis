@@ -5,6 +5,12 @@ TURBINE_ID_COL = "turbine_id"
 
 TARGET_COL = "Generator bearing front temperature (°C)"
 
+TARGET_COLS = [
+    "Generator bearing front temperature (°C)",
+    "Stator temperature 1 (°C)",
+    "Rear bearing temperature (°C)",
+]
+
 INPUT_COLS = [
     "Wind speed (m/s)",
     "Power (kW)",
@@ -12,8 +18,11 @@ INPUT_COLS = [
     "Nacelle temperature (°C)",
     "Generator RPM (RPM)",
     "Rotor speed (RPM)",
-    "Stator temperature 1 (°C)",
-    "Generator bearing front temperature (°C)",   # autoregressive
+    "Gearbox speed (RPM)",
+    "Ambient temperature (converter) (°C)",
+    "Stator temperature 1 (°C)", #target
+    "Generator bearing front temperature (°C)", #target
+    "Rear bearing temperature (°C)", #target
 ]
 
 # 数据分辨率通常是 10 分钟
@@ -32,4 +41,7 @@ PHYSICAL_LIMITS = {
     "Stator temperature 1 (°C)": (-20.0, 180.0),
     "Nacelle ambient temperature (°C)": (-40.0, 60.0),
     "Nacelle temperature (°C)": (-40.0, 80.0),
+    "Rear bearing temperature (°C)": (-20, 150),
+    "Ambient temperature (converter) (°C)": (-40, 100),
+    "Gearbox speed (RPM)": (0, 3000),
 }

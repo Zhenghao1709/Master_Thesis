@@ -9,7 +9,7 @@ During the raw SCADA extraction step, I found that the 2023 and 2024 files are m
 
 ### Questions
 - Do we know why the 2023 and 2024 SCADA files are much larger than the previous years?
-- Is the difference caused by higher sampling frequency, more recorded variables, export format changes, or a longer covered period?
+- Is the difference caused by higher sampling frequency, more recorded variables or export format changes?
 - For the next stage, would it be reasonable to first complete the workflow on 2016–2022 and then integrate 2023–2024 separately with a chunk-based or staged processing strategy?
 
 ### Current idea for integration
@@ -33,22 +33,34 @@ This means that:
 - manual visual inspection alone is not sufficient to decide which variables should be used as target signals,
 - and target selection should not rely only on whether a signal looks abnormal in raw plots around events.
 
-### Target signal selection
-Based on the current signal exploration and correlation inspection, I selected the following two target signals for the next stage:
+### Input signal selection
+    "Wind speed (m/s)",
+    "Power (kW)",
+    "Nacelle ambient temperature (°C)",
+    "Nacelle temperature (°C)",
+    "Generator RPM (RPM)",
+    "Rotor speed (RPM)",
+    "Gearbox speed (RPM)",
+    "Ambient temperature (converter) (°C)",
+    "Stator temperature 1 (°C)", #target
+    "Generator bearing front temperature (°C)"
+    "Rear bearing temperature (°C)"
 
-- `Generator bearing front temperature (°C)`
-- `Stator temperature 1 (°C)`
+The correlation between "Generator RPM", "Rotor speed", and "Gearbox speed" is nearly identical, I think it's not necessarily required to include all three.
+
+The correlation between "Nacelle ambient temperature" and "Ambient temperature (converter)" is approximately 0.978668; the two are also highly redundant. 
+
+### Target signal selection
+Based on the current signal exploration and correlation inspection, I selected the following three target signals for the next stage:
+
+    "Stator temperature 1 (°C)", #target
+    "Generator bearing front temperature (°C)"
+    "Rear bearing temperature (°C)"
 
 ### Rationale
 The target selection was made based on visual observation of the signal behavior and their relationships with the other selected SCADA variables.
 
-#### 1. `Stator temperature 1 (°C)`
-This signal appears to have a relatively clear and regular pattern under healthy operating conditions.  
-It shows moderate relationships with key operating variables such as wind speed, power, generator speed, and rotor speed, which suggests that its normal behavior may be easier for the model to learn.
 
-#### 2. `Generator bearing front temperature (°C)`
-This signal was kept as an important target because it still shows interpretable relationships with environmental and thermal-state variables, especially nacelle temperature, ambient-related variables, and other temperature signals.  
-Even if some of these relationships are negative rather than positive, they still indicate that the signal is not random and may be modeled through its dependence on operating and thermal conditions.
 
 ### Current conclusion
-At this stage, these two signals seem to be the most suitable target candidates among the currently selected variables, because they are both physically meaningful and show patterns that may support normal behavior modeling.We can appropriately increase the number of input features, as they may provide more information on operating conditions and thermal states; however, at this stage, I hope to keep the number of target signals within 2-3 to maintain a clear modeling and evaluation framework. Too many targets do not necessarily reduce accuracy, but they will significantly increase model complexity, training and comparison costs, and may also weaken the analytical depth of each target.
+At this stage, these three signals seem to be the most suitable target candidates among the currently selected variables, because they are both physically meaningful and show patterns that may support normal behavior modeling.We can appropriately increase the number of input features, as they may provide more information on operating conditions and thermal states; however, at this stage, I hope to keep the number of target signals within 2-3 to maintain a clear modeling and evaluation framework. Too many targets do not necessarily reduce accuracy, but they will significantly increase model complexity, training and comparison costs, and may also weaken the analytical depth of each target.
