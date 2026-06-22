@@ -30,6 +30,8 @@ models/**/*.ckpt
 
 # Generated results
 results/kelmarsh/logs/**
+results/kelmarsh/predictions/**
+results/kelmarsh/experiments/**
 
 
 # Heavy artifacts

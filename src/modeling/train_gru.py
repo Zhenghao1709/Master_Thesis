@@ -23,6 +23,7 @@ def train_gru_model(
     num_layers: int = 1,
     lr: float = 1e-3,
     epochs: int = 20,
+    early_stopping_patience: int | None = 8,
     model_save_path: str | Path | None = None,
     log_save_path: str | Path | None = None,
 ):
@@ -66,6 +67,7 @@ def train_gru_model(
 
     logs = []
     best_val_loss = float("inf")
+    epochs_without_improvement = 0
 
     # 4. 训练循环
     for epoch in range(epochs):
@@ -109,10 +111,23 @@ def train_gru_model(
         # 保存最优模型
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            epochs_without_improvement = 0
             if model_save_path is not None:
                 model_save_path = Path(model_save_path)
                 model_save_path.parent.mkdir(parents=True, exist_ok=True)
                 torch.save(model.state_dict(), model_save_path)
+        else:
+            epochs_without_improvement += 1
+
+        if (
+            early_stopping_patience is not None
+            and epochs_without_improvement >= early_stopping_patience
+        ):
+            print(
+                f"Early stopping at epoch {epoch + 1}: validation loss did not improve "
+                f"for {early_stopping_patience} consecutive epochs."
+            )
+            break
 
     log_df = pd.DataFrame(logs)
 
