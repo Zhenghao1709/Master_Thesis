@@ -38,8 +38,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def make_run_id(turbine_name: str, epochs: int) -> str:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{turbine_name.lower()}_e{epochs}_{timestamp}"
+    return f"{turbine_name.lower()}_e{epochs}"
 
 
 def set_random_seed(seed: int) -> None:
