@@ -15,6 +15,7 @@ from src.features.scaling import load_scaler
 def load_trained_gru_model(
     model_path: str | Path,
     input_size: int,
+    output_size: int,
     hidden_size: int = 64,
     num_layers: int = 1,
     device: torch.device | None = None,
@@ -26,6 +27,7 @@ def load_trained_gru_model(
         input_size=input_size,
         hidden_size=hidden_size,
         num_layers=num_layers,
+        output_size=output_size,
     ).to(device)
 
     state_dict = torch.load(model_path, map_location=device)
@@ -37,7 +39,7 @@ def load_trained_gru_model(
 def prepare_scaled_sequences(
     df: pd.DataFrame,
     input_cols: list[str],
-    target_col: str,
+    target_cols: list[str],
     seq_len: int,
     x_scaler,
     y_scaler,
@@ -53,16 +55,16 @@ def prepare_scaled_sequences(
     """
     out = df.copy()
 
-    # target_col may also be an autoregressive input. Keep the raw values so
-    # input and output scaling are each applied exactly once.
-    raw_target = out[[target_col]].copy()
+    # Targets may also be autoregressive inputs. Keep their raw values so input
+    # and output scaling are each applied to the original signals.
+    raw_targets = out[target_cols].copy()
     out[input_cols] = x_scaler.transform(out[input_cols])
-    out[[target_col]] = y_scaler.transform(raw_target)
+    out[target_cols] = y_scaler.transform(raw_targets)
 
     X, y_scaled = create_sequences(
         out,
         input_cols=input_cols,
-        target_col=target_col,
+        target_cols=target_cols,
         seq_len=seq_len,
     )
 
@@ -102,7 +104,7 @@ def predict_with_gru(
         for start in range(0, len(X), batch_size):
             end = start + batch_size
             xb = torch.tensor(X[start:end], dtype=torch.float32).to(device)
-            pred = model(xb).cpu().numpy().reshape(-1)
+            pred = model(xb).cpu().numpy()
             preds.append(pred)
 
     return np.concatenate(preds, axis=0)
@@ -113,11 +115,13 @@ def build_prediction_dataframe(
     y_true_scaled: np.ndarray,
     y_pred_scaled: np.ndarray,
     y_scaler,
+    target_cols: list[str],
 ) -> pd.DataFrame:
-    y_true = y_scaler.inverse_transform(y_true_scaled.reshape(-1, 1)).reshape(-1)
-    y_pred = y_scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).reshape(-1)
+    y_true = y_scaler.inverse_transform(y_true_scaled)
+    y_pred = y_scaler.inverse_transform(y_pred_scaled)
 
     pred_df = meta_df.copy()
-    pred_df["y_true"] = y_true
-    pred_df["y_pred"] = y_pred
+    for index, target_col in enumerate(target_cols):
+        pred_df[f"y_true::{target_col}"] = y_true[:, index]
+        pred_df[f"y_pred::{target_col}"] = y_pred[:, index]
     return pred_df

@@ -11,14 +11,14 @@ flags_path = (
 
 flagged_df = pd.read_parquet(flags_path)
 
-summary = flagged_df[[
+summary_cols = [
     "is_good_quality",
     "is_physically_valid",
-    "is_normal_operating_condition",
     "is_dirty",
     "is_event_like",
     "is_healthy_candidate"
-]].mean()
+]
+summary = flagged_df[[c for c in summary_cols if c in flagged_df.columns]].mean()
 
 print(summary)
 

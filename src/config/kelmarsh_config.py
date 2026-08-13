@@ -3,8 +3,6 @@ from __future__ import annotations
 TIME_COL = "Date and time"
 TURBINE_ID_COL = "turbine_id"
 
-TARGET_COL = "Generator bearing front temperature (°C)"
-
 TARGET_COLS = [
     "Generator bearing front temperature (°C)",
     "Stator temperature 1 (°C)",

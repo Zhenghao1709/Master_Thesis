@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 def create_sequences(
     df,
     input_cols,
-    target_col,
+    target_cols,
     seq_len=12,
     id_cols=("turbine_id", "segment_id"),
     time_col="Date and time",
@@ -23,7 +23,7 @@ def create_sequences(
         g = g.sort_values(time_col)
 
         x_values = g[input_cols].values
-        y_values = g[target_col].values
+        y_values = g[target_cols].values
 
         if len(g) <= seq_len:
             continue
@@ -41,7 +41,7 @@ def create_sequences(
 class SequenceDataset(Dataset):
     def __init__(self, X, y):
         self.X = torch.tensor(X, dtype=torch.float32)
-        self.y = torch.tensor(y, dtype=torch.float32).unsqueeze(-1)
+        self.y = torch.tensor(y, dtype=torch.float32)
 
     def __len__(self):
         return len(self.X)

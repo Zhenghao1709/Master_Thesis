@@ -12,6 +12,7 @@ class GRUNBM(nn.Module):
         hidden_size: int = 64,
         num_layers: int = 1,
         dropout: float = 0.0,
+        output_size: int = 3,
     ):
         super().__init__()
 
@@ -22,10 +23,10 @@ class GRUNBM(nn.Module):
             batch_first=True,
             dropout=dropout if num_layers > 1 else 0.0,
         )
-        self.fc = nn.Linear(hidden_size, 1)
+        self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
         out, _ = self.gru(x)       # out: [B, T, H]
         last_hidden = out[:, -1, :]  # 取最后一个时间步
-        pred = self.fc(last_hidden)  # [B, 1]
+        pred = self.fc(last_hidden)  # [B, output_size]
         return pred

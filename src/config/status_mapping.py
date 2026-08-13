@@ -43,12 +43,13 @@ IEC_NORMAL_CATEGORIES = {
     "Full performance",
 }
 
-# buffer 设置，后面 heuristics 会用到
-DEFAULT_EVENT_PRE_DAYS = 14
-DEFAULT_EVENT_POST_DAYS = 3
+# Calendar-month exclusion window around fault events. These offsets are
+# applied while aligning both status-log events and manually labelled events.
+DEFAULT_EVENT_PRE_MONTHS = 2
+DEFAULT_EVENT_POST_MONTHS = 1
 
 DEFAULT_MAINTENANCE_PRE_DAYS = 1
-DEFAULT_MAINTENANCE_POST_DAYS = 2
+DEFAULT_MAINTENANCE_POST_DAYS = 1
 
-DEFAULT_COMM_PRE_HOURS = 1
-DEFAULT_COMM_POST_HOURS = 1
+DEFAULT_COMM_PRE_DAYS = 1
+DEFAULT_COMM_POST_DAYS = 1

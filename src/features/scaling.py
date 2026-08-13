@@ -82,30 +82,30 @@ class ColumnwiseScaler:
 def fit_scalers(
     train_df: pd.DataFrame,
     input_cols: list[str],
-    target_col: str,
+    target_cols: list[str],
 ) -> tuple[ColumnwiseScaler, ColumnwiseScaler]:
     x_scaler = ColumnwiseScaler(SCALER_TYPE_BY_SIGNAL)
     y_scaler = ColumnwiseScaler(SCALER_TYPE_BY_SIGNAL)
 
     x_scaler.fit(train_df[input_cols])
-    y_scaler.fit(train_df[[target_col]])
+    y_scaler.fit(train_df[target_cols])
     return x_scaler, y_scaler
 
 
 def apply_scalers(
     df: pd.DataFrame,
     input_cols: list[str],
-    target_col: str,
+    target_cols: list[str],
     x_scaler: ColumnwiseScaler,
     y_scaler: ColumnwiseScaler,
 ) -> pd.DataFrame:
     out = df.copy()
 
-    # The autoregressive target can also be an input feature. Preserve its raw
-    # values so it is not transformed once as input and again as output.
-    raw_target = out[[target_col]].copy()
+    # Autoregressive targets can also be input features. Preserve their raw
+    # values so input and output scaling are each applied to the raw signals.
+    raw_targets = out[target_cols].copy()
     out[input_cols] = x_scaler.transform(out[input_cols])
-    out[[target_col]] = y_scaler.transform(raw_target)
+    out[target_cols] = y_scaler.transform(raw_targets)
     return out
 
 

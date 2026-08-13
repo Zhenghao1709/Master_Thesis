@@ -4,85 +4,51 @@ project/
 │   │   └── kelmarsh/
 │   │       ├── scada/
 │   │       │   ├── Kelmarsh_1/
-│   │       │   │   ├── Turbine_Data_Kelmarsh_1_2016-....csv
-│   │       │   │   ├── Turbine_Data_Kelmarsh_1_2017-....csv
-│   │       │   │   └── ...
 │   │       │   ├── Kelmarsh_2/
 │   │       │   └── ...
-│   │       │
-│   │       └── status/
-│   │           ├── Kelmarsh_1/
-│   │           │   ├── Status_Kelmarsh_1_2016-....csv
-│   │           │   ├── Status_Kelmarsh_1_2017-....csv
-│   │           │   └── ...
-│   │           ├── Kelmarsh_2/
-│   │           └── ...
+│   │       ├── status/
+│   │       │   ├── Kelmarsh_1/
+│   │       │   ├── Kelmarsh_2/
+│   │       │   └── ...
+│   │       └── auxiliary/
+│   │           ├── kelmarsh_event_dataset.csv
+│   │           └── kelmarsh_curtailment_dataset.csv
 │   │
 │   ├── interim/
 │   │   └── kelmarsh/
 │   │       ├── merged_scada/
-│   │       │   ├── kelmarsh_1_scada_2016_2024.parquet
-│   │       │   ├── kelmarsh_2_scada_2016_2024.parquet
-│   │       │   └── ...
 │   │       ├── merged_status/
-│   │       │   ├── kelmarsh_1_status_2016_2024.parquet
-│   │       │   ├── kelmarsh_2_status_2016_2024.parquet
-│   │       │   └── ...
+│   │       ├── merged_auxiliary/
+│   │       │   ├── kelmarsh_event_dataset.parquet
+│   │       │   └── kelmarsh_curtailment_dataset.parquet
 │   │       ├── aligned/
 │   │       │   ├── kelmarsh_1_scada_with_status.parquet
-│   │       │   ├── kelmarsh_2_scada_with_status.parquet
+│   │       │   ├── kelmarsh_1_scada_with_status_event.parquet
+│   │       │   └── ...
+│   │       ├── light_scada_parts/
+│   │       │   ├── kelmarsh_1
+│   │       │   ├── kelmarsh_2
 │   │       │   └── ...
 │   │       └── flags/
-│   │           ├── kelmarsh_1_with_flags.parquet
-│   │           └── ...
 │   │
 │   └── processed/
 │       └── kelmarsh/
 │           ├── healthy_candidates/
-│           │   ├── kelmarsh_1_healthy_candidates.parquet
-│           │   └── ...
 │           ├── healthy_segments/
-│           │   ├── kelmarsh_1_healthy_segments.parquet
-│           │   └── ...
 │           ├── train_val/
-│           │   ├── kelmarsh_1_train_healthy.parquet
-│           │   ├── kelmarsh_1_val_healthy.parquet
-│           │   └── ...
 │           ├── monitoring_windows/
-│           │   ├── kelmarsh_1_monitoring_windows.parquet
-│           │   └── ...
 │           └── metadata/
-│               ├── feature_list.json
-│               ├── event_table.parquet
-│               └── dirty_windows.parquet
 │
 ├── models/
 │   └── kelmarsh/
 │       ├── turbine_specific/
-│       │   ├── kelmarsh_1_gru_gen_bearing_front.pth
-│       │   ├── kelmarsh_2_gru_gen_bearing_front.pth
-│       │   └── ...
 │       └── scalers/
-│           ├── kelmarsh_1_x_scaler.pkl
-│           ├── kelmarsh_1_y_scaler.pkl
-│           └── ...
-│
-├── results/
-│   └── kelmarsh/
-│       ├── logs/
-│       ├── predictions/
-│       ├── anomaly_scores/
-│       ├── event_analysis/
-│       └── figures/
 │
 ├── notebooks/
-│   ├── 01_inspect_scada_headers.ipynb
-│   ├── 02_inspect_status_logs.ipynb
-│   ├── 03_merge_scada_and_status.ipynb
-│   ├── 04_build_heuristics.ipynb
-│   ├── 05_build_healthy_segments.ipynb
-│   ├── 06_train_gru_nbm.ipynb
-│   └── 07_event_detection_analysis.ipynb
+│   ├── 01_inspect_status.ipynb
+│   ├── 02_check_healthy_segments.ipynb
+│   ├── 03_signal_viewer.ipynb
+│   └── 04_plot_val_predictions.ipynb
 │
 ├── src/
 │   ├── config/
@@ -92,21 +58,23 @@ project/
 │   ├── data/
 │   │   ├── read_scada.py
 │   │   ├── read_status.py
+│   │   ├── read_event_dataset.py
+│   │   ├── read_curtailment_dataset.py
 │   │   ├── merge_years.py
 │   │   ├── align_scada_status.py
-│   │   └── split_by_turbine.py
+│   │   ├── align_scada_event.py
+│   │   └── align_scada_curtailment.py
 │   │
 │   ├── preprocessing/
 │   │   ├── clean_scada.py
 │   │   ├── clean_status.py
+│   │   ├── clean_event_dataset.py
+│   │   ├── clean_curtailment_dataset.py
 │   │   ├── heuristics.py
-│   │   ├── build_event_buffer.py
-│   │   ├── build_dirty_mask.py
 │   │   ├── build_healthy_candidates.py
 │   │   └── segment_builder.py
 │   │
 │   ├── features/
-│   │   ├── select_features.py
 │   │   └── scaling.py
 │   │
 │   ├── modeling/
@@ -115,17 +83,13 @@ project/
 │   │   ├── train_gru.py
 │   │   └── predict.py
 │   │
-│   ├── detection/
-│   │   ├── residuals.py
-│   │   ├── anomaly_score.py
-│   │   ├── event_windows.py
-│   │   └── evaluate_against_status.py
-│   │
-│   └── utils/
-│       ├── io.py
-│       └── plotting.py
+│   └── detection/
+│       ├── residuals.py
+│       └── anomaly_score.py
 │
-├── main_merge_kelmarsh.py
 ├── main_build_healthy_data.py
 ├── main_train_gru.py
-└── main_detect_events.py
+├── main_predict_val.py
+├── main_extract_scada_light.py
+├── main_merge_light_scada_parts.py
+├── main_build_all_turbines.py

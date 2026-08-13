@@ -16,12 +16,15 @@ def train_gru_model(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
     input_cols: list[str],
-    target_col: str,
+    target_cols: list[str],
     seq_len: int,
     batch_size: int = 64,
     hidden_size: int = 64,
     num_layers: int = 1,
+    dropout: float = 0.0,
     lr: float = 1e-3,
+    weight_decay: float = 0.0,
+    amsgrad: bool = False,
     epochs: int = 20,
     early_stopping_patience: int | None = 8,
     model_save_path: str | Path | None = None,
@@ -31,14 +34,14 @@ def train_gru_model(
     X_train, y_train = create_sequences(
         train_df,
         input_cols=input_cols,
-        target_col=target_col,
+        target_cols=target_cols,
         seq_len=seq_len,
     )
 
     X_val, y_val = create_sequences(
         val_df,
         input_cols=input_cols,
-        target_col=target_col,
+        target_cols=target_cols,
         seq_len=seq_len,
     )
 
@@ -60,10 +63,17 @@ def train_gru_model(
         input_size=len(input_cols),
         hidden_size=hidden_size,
         num_layers=num_layers,
+        dropout=dropout,
+        output_size=len(target_cols),
     ).to(device)
 
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=lr,
+        weight_decay=weight_decay,
+        amsgrad=amsgrad,
+    )
 
     logs = []
     best_val_loss = float("inf")

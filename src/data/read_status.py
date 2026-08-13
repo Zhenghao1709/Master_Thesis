@@ -18,6 +18,8 @@ EXPECTED_STATUS_COLUMNS = [
     "IEC category",
 ]
 
+STATUS_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
 
 def _detect_header_row(csv_path: str | Path, max_scan_lines: int = 50) -> int:
     """
@@ -61,8 +63,16 @@ def read_status_csv(
         print("实际读取到的列名:", df.columns.tolist())
         raise ValueError(f"Missing required status columns in {csv_path.name}: {missing}")
 
-    df["Timestamp start"] = pd.to_datetime(df["Timestamp start"], errors="coerce")
-    df["Timestamp end"] = pd.to_datetime(df["Timestamp end"], errors="coerce")
+    df["Timestamp start"] = pd.to_datetime(
+        df["Timestamp start"],
+        format=STATUS_TIME_FORMAT,
+        errors="coerce",
+    )
+    df["Timestamp end"] = pd.to_datetime(
+        df["Timestamp end"],
+        format=STATUS_TIME_FORMAT,
+        errors="coerce",
+    )
 
     if "Duration" in df.columns:
         try:

@@ -10,7 +10,6 @@ def extract_healthy_candidates(df: pd.DataFrame, cols_to_keep: list[str]) -> pd.
         "row_missing_ratio",
         "is_good_quality",
         "is_physically_valid",
-        "is_normal_operating_condition",
         "is_dirty",
         "is_event_like",
         "is_healthy_candidate",

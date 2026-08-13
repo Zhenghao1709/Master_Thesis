@@ -37,11 +37,16 @@ Current baseline parameter settings:
 
 - **Physical limits**:  
   A coarse plausibility filter is applied, for example:
-  - Wind speed: `0 ~ 40`
-  - Power: `-100 ~ 3000`
-  - Generator RPM: `0 ~ 2500`
+  - Wind speed: `3 ~ 40`
+  - Power: `50 ~ 3000`
+  - Generator RPM: `100 ~ 2500`
   - Rotor speed: `0 ~ 30`
   - Generator bearing front temperature: `-20 ~ 150`
+
+
+hist
+
+seaborn.pairplot
 
 ### Question
 - Are these parameter values reasonable for the first baseline?
@@ -78,7 +83,6 @@ Using only `Kelmarsh_1` data from 2016, the first preprocessing run produced the
 ### Healthy candidate filtering ratios
 - `is_good_quality ≈ 65.5%`
 - `is_physically_valid ≈ 99.98%`
-- `is_normal_operating_condition ≈ 54.1%`
 - `is_dirty ≈ 34.6%`
 - `is_event_like ≈ 17.8%`
 - `is_healthy_candidate ≈ 46.3%`
@@ -93,3 +97,4 @@ Using only `Kelmarsh_1` data from 2016, the first preprocessing run produced the
 
 ### Question
 - Does this amount of healthy data look sufficient and reasonable for training the first GRU-based NBM?
+
