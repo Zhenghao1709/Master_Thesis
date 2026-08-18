@@ -7,7 +7,6 @@ from pathlib import Path
 import pandas as pd
 
 from src.config.kelmarsh_config import FREQ_MINUTES, TARGET_COLS
-from src.data.read_event_dataset import read_event_dataset
 from src.detection.residuals import (
     apply_residual_baseline_detection,
     fit_residual_quantile_thresholds,
@@ -22,13 +21,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--quantile",
         type=float,
-        default=0.95,
+        default=0.995,
         help="Validation residual quantile used as the anomaly threshold.",
     )
     parser.add_argument(
         "--min-consecutive",
         type=int,
-        default=6,
+        default=12,
         help="Minimum consecutive anomaly points required to raise an alarm.",
     )
     parser.add_argument(
@@ -80,84 +79,75 @@ def load_prediction_file(
     return pd.read_csv(path)
 
 
-def normalise_event_turbine(value: object) -> str | None:
-    if pd.isna(value):
-        return None
-    text = str(value).strip()
-    if text.lower().startswith("kelmarsh_"):
-        return text
-    digits = "".join(ch for ch in text if ch.isdigit())
-    return f"Kelmarsh_{digits}" if digits else None
+def turbine_id_from_flag_path(flag_path: Path) -> str:
+    prefix = flag_path.stem.replace("_with_flags", "")
+    return "_".join(part.capitalize() for part in prefix.split("_"))
 
 
-def evaluate_fault_horizon(
-    detections: pd.DataFrame,
-    events: pd.DataFrame,
+def build_event_summary_from_flag_events(
+    project_root: Path,
     horizon_days: int,
+    event_flag_col: str = "in_event",
+    start_year: int = 2023,
+    end_year: int = 2024,
 ) -> pd.DataFrame:
-    if "Timestamp start" not in events.columns:
-        raise ValueError("Event dataset must contain 'Timestamp start'.")
-    if "Turbine" not in events.columns:
-        raise ValueError("Event dataset must contain 'Turbine'.")
-
-    alarms = detections.loc[detections["is_alarm"]].copy()
-    alarms["Date and time"] = pd.to_datetime(alarms["Date and time"], errors="coerce")
-
-    rows = []
-    events = events.copy()
-    events["event_turbine_id"] = events["Turbine"].map(normalise_event_turbine)
-    events["Timestamp start"] = pd.to_datetime(events["Timestamp start"], errors="coerce")
-    if "Timestamp end" in events.columns:
-        events["Timestamp end"] = pd.to_datetime(events["Timestamp end"], errors="coerce")
-
-    events = events[
-        events["Timestamp start"].notna()
-        & events["Timestamp start"].dt.year.isin([2023, 2024])
-        & events["event_turbine_id"].notna()
-    ].copy()
+    flags_dir = project_root / "data" / "interim" / "kelmarsh" / "flags"
+    if not flags_dir.exists():
+        raise FileNotFoundError(f"Missing flags directory: {flags_dir}")
 
     horizon = pd.Timedelta(days=horizon_days)
-    for event_index, event in events.reset_index(drop=True).iterrows():
-        event_start = event["Timestamp start"]
-        window_start = event_start - horizon
-        event_alarms = alarms[
-            (alarms["turbine_id"] == event["event_turbine_id"])
-            & (alarms["Date and time"] >= window_start)
-            & (alarms["Date and time"] < event_start)
-        ].copy()
+    rows = []
+    for flag_path in sorted(flags_dir.glob("*_with_flags.parquet")):
+        turbine_id = turbine_id_from_flag_path(flag_path)
+        intervals = intervals_from_flag_file(
+            flag_path,
+            flag_cols=[event_flag_col],
+            start_year=start_year,
+            end_year=end_year,
+        ).get(event_flag_col, [])
 
-        if event_alarms.empty:
-            detected = False
-            first_alarm_time = pd.NaT
-            lead_time_hours = pd.NA
-            alarm_count = 0
-            alarm_targets = ""
-        else:
-            detected = True
-            first_alarm_time = event_alarms["Date and time"].min()
-            lead_time_hours = (event_start - first_alarm_time).total_seconds() / 3600
-            alarm_count = int(len(event_alarms))
-            alarm_targets = "; ".join(sorted(event_alarms["target"].dropna().unique()))
+        for event_start, event_end in intervals:
+            rows.append(
+                {
+                    "turbine_id": turbine_id,
+                    "event_start": event_start,
+                    "event_end": event_end,
+                    "category": "status_flag_event",
+                    "component": "",
+                    "message": event_flag_col,
+                    "event_source": f"flag:{event_flag_col}",
+                    "horizon_start": event_start - horizon,
+                    "detected_in_horizon": False,
+                    "first_alarm_time": pd.NaT,
+                    "lead_time_hours": pd.NA,
+                    "alarm_count_in_horizon": 0,
+                    "alarm_targets": "",
+                }
+            )
 
-        rows.append(
-            {
-                "event_index": event_index,
-                "turbine_id": event["event_turbine_id"],
-                "event_start": event_start,
-                "event_end": event.get("Timestamp end", pd.NaT),
-                "category": event.get("Category", ""),
-                "component": event.get("Component", ""),
-                "message": event.get("Message stack", ""),
-                "horizon_start": window_start,
-                "detected_in_horizon": detected,
-                "first_alarm_time": first_alarm_time,
-                "lead_time_hours": lead_time_hours,
-                "alarm_count_in_horizon": alarm_count,
-                "alarm_targets": alarm_targets,
-            }
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "event_index",
+                "turbine_id",
+                "event_start",
+                "event_end",
+                "category",
+                "component",
+                "message",
+                "event_source",
+                "horizon_start",
+                "detected_in_horizon",
+                "first_alarm_time",
+                "lead_time_hours",
+                "alarm_count_in_horizon",
+                "alarm_targets",
+            ]
         )
 
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows).sort_values(["turbine_id", "event_start", "event_end"]).reset_index(drop=True)
+    out.insert(0, "event_index", range(len(out)))
+    return out
 
 
 def annotate_alarm_horizon_matches(
@@ -219,6 +209,179 @@ def build_alarm_episodes(
     return episodes
 
 
+def annotate_alarm_episode_horizon_matches(
+    alarm_episodes: pd.DataFrame,
+    event_summary: pd.DataFrame,
+    freq_minutes: int = FREQ_MINUTES,
+) -> pd.DataFrame:
+    out = alarm_episodes.copy()
+    out["in_fault_horizon"] = False
+    if out.empty or event_summary.empty:
+        return out
+
+    out["start_time"] = pd.to_datetime(out["start_time"], errors="coerce")
+    out["end_time"] = pd.to_datetime(out["end_time"], errors="coerce")
+    event_summary = event_summary.copy()
+    event_summary["horizon_start"] = pd.to_datetime(event_summary["horizon_start"], errors="coerce")
+    event_summary["event_start"] = pd.to_datetime(event_summary["event_start"], errors="coerce")
+
+    # Treat an alarm episode as within the horizon when the episode overlaps
+    # [event_start - horizon_days, event_start). This includes episodes that
+    # started earlier than the horizon but end inside it or continue into it.
+    episode_end_exclusive = out["end_time"] + pd.Timedelta(minutes=freq_minutes)
+    for _, event in event_summary.iterrows():
+        mask = (
+            (out["turbine_id"] == event["turbine_id"])
+            & (out["start_time"] < event["event_start"])
+            & (episode_end_exclusive >= event["horizon_start"])
+        )
+        out.loc[mask, "in_fault_horizon"] = True
+
+    return out
+
+
+def update_event_summary_from_alarm_episodes(
+    event_summary: pd.DataFrame,
+    alarm_episodes: pd.DataFrame,
+    freq_minutes: int = FREQ_MINUTES,
+) -> pd.DataFrame:
+    out = event_summary.copy()
+    if out.empty:
+        return out
+
+    out["event_start"] = pd.to_datetime(out["event_start"], errors="coerce")
+    out["horizon_start"] = pd.to_datetime(out["horizon_start"], errors="coerce")
+    episodes = alarm_episodes.copy()
+    episodes["start_time"] = pd.to_datetime(episodes["start_time"], errors="coerce")
+    episodes["end_time"] = pd.to_datetime(episodes["end_time"], errors="coerce")
+    episode_end_exclusive = episodes["end_time"] + pd.Timedelta(minutes=freq_minutes)
+
+    for index, event in out.iterrows():
+        overlapping = episodes[
+            (episodes["turbine_id"] == event["turbine_id"])
+            & (episodes["start_time"] < event["event_start"])
+            & (episode_end_exclusive >= event["horizon_start"])
+        ].copy()
+
+        if overlapping.empty:
+            out.loc[index, "detected_in_horizon"] = False
+            out.loc[index, "first_alarm_time"] = pd.NaT
+            out.loc[index, "lead_time_hours"] = pd.NA
+            out.loc[index, "alarm_count_in_horizon"] = 0
+            out.loc[index, "alarm_targets"] = ""
+            out.loc[index, "alarm_episode_count_in_horizon"] = 0
+            continue
+
+        first_alarm_time = overlapping["start_time"].min()
+        out.loc[index, "detected_in_horizon"] = True
+        out.loc[index, "first_alarm_time"] = first_alarm_time
+        out.loc[index, "lead_time_hours"] = (
+            event["event_start"] - first_alarm_time
+        ).total_seconds() / 3600
+        out.loc[index, "alarm_count_in_horizon"] = int(overlapping["alarm_points"].sum())
+        out.loc[index, "alarm_episode_count_in_horizon"] = int(len(overlapping))
+        out.loc[index, "alarm_targets"] = "; ".join(sorted(overlapping["target"].dropna().unique()))
+
+    return out
+
+
+def intervals_from_flag_file(
+    flag_path: Path,
+    flag_cols: list[str],
+    start_year: int = 2023,
+    end_year: int = 2024,
+) -> dict[str, list[tuple[pd.Timestamp, pd.Timestamp]]]:
+    if not flag_path.exists():
+        return {flag_col: [] for flag_col in flag_cols}
+
+    cols = ["Date and time"] + flag_cols
+    flags = pd.read_parquet(flag_path, columns=cols)
+    flags["Date and time"] = pd.to_datetime(flags["Date and time"], errors="coerce")
+    flags = flags[
+        flags["Date and time"].notna()
+        & flags["Date and time"].dt.year.between(start_year, end_year)
+    ].copy()
+
+    intervals_by_flag = {}
+    for flag_col in flag_cols:
+        part = flags[["Date and time", flag_col]].copy()
+        part[flag_col] = part[flag_col].fillna(False).astype(bool)
+        part = part.sort_values("Date and time").reset_index(drop=True)
+        groups = part[flag_col].ne(part[flag_col].shift()).cumsum()
+
+        intervals = []
+        for _, group in part.loc[part[flag_col]].groupby(groups):
+            start = group["Date and time"].iloc[0]
+            end = group["Date and time"].iloc[-1] + pd.Timedelta(minutes=FREQ_MINUTES)
+            intervals.append((start, end))
+        intervals_by_flag[flag_col] = intervals
+
+    return intervals_by_flag
+
+
+def overlaps_any_interval(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    intervals: list[tuple[pd.Timestamp, pd.Timestamp]],
+) -> bool:
+    for interval_start, interval_end in intervals:
+        if start < interval_end and end > interval_start:
+            return True
+    return False
+
+
+def annotate_alarm_episode_operating_context(
+    alarm_episodes: pd.DataFrame,
+    project_root: Path,
+    freq_minutes: int = FREQ_MINUTES,
+) -> pd.DataFrame:
+    out = alarm_episodes.copy()
+    context_flags = {
+        "in_manual_event_interval": "in_manual_event",
+        "in_status_event_interval": "in_event",
+        "in_maintenance_interval": "in_maintenance",
+        "in_communication_interval": "in_communication",
+        "in_curtailment_interval": "in_curtailment",
+    }
+    for output_col in context_flags:
+        out[output_col] = False
+    out["in_non_operational_interval"] = False
+    out["is_operational_false_alarm"] = False
+
+    if out.empty:
+        return out
+
+    out["start_time"] = pd.to_datetime(out["start_time"], errors="coerce")
+    out["end_time"] = pd.to_datetime(out["end_time"], errors="coerce")
+    flag_cols = list(context_flags.values())
+    flags_dir = project_root / "data" / "interim" / "kelmarsh" / "flags"
+
+    for turbine_id, idx in out.groupby("turbine_id", sort=False).groups.items():
+        flag_path = flags_dir / f"{str(turbine_id).lower()}_with_flags.parquet"
+        intervals_by_flag = intervals_from_flag_file(flag_path, flag_cols)
+
+        for row_index in idx:
+            start = out.loc[row_index, "start_time"]
+            end = out.loc[row_index, "end_time"] + pd.Timedelta(minutes=freq_minutes)
+            if pd.isna(start) or pd.isna(end):
+                continue
+
+            for output_col, flag_col in context_flags.items():
+                out.loc[row_index, output_col] = overlaps_any_interval(
+                    start,
+                    end,
+                    intervals_by_flag.get(flag_col, []),
+                )
+
+    non_operational_cols = list(context_flags.keys())
+    out["in_non_operational_interval"] = out[non_operational_cols].any(axis=1)
+    out["is_operational_false_alarm"] = (
+        ~out["in_fault_horizon"].fillna(False).astype(bool)
+        & ~out["in_non_operational_interval"].fillna(False).astype(bool)
+    )
+    return out
+
+
 def summarize_detection_performance(
     detections: pd.DataFrame,
     event_summary: pd.DataFrame,
@@ -238,6 +401,17 @@ def summarize_detection_performance(
         int(alarm_episodes["in_fault_horizon"].sum()) if total_alarm_episodes else 0
     )
     false_alarm_episodes = total_alarm_episodes - true_alarm_episodes
+    non_operational_alarm_episodes = (
+        int(alarm_episodes["in_non_operational_interval"].sum())
+        if "in_non_operational_interval" in alarm_episodes.columns and total_alarm_episodes
+        else 0
+    )
+    operational_false_alarm_episodes = (
+        int(alarm_episodes["is_operational_false_alarm"].sum())
+        if "is_operational_false_alarm" in alarm_episodes.columns and total_alarm_episodes
+        else false_alarm_episodes
+    )
+    operational_alarm_opportunities = true_alarm_episodes + operational_false_alarm_episodes
 
     def safe_ratio(numerator: int, denominator: int) -> float:
         return float(numerator / denominator) if denominator else 0.0
@@ -261,6 +435,13 @@ def summarize_detection_performance(
             "true_alarm_episodes": true_alarm_episodes,
             "false_alarm_episodes": false_alarm_episodes,
             "false_alarm_episode_rate": safe_ratio(false_alarm_episodes, total_alarm_episodes),
+            "non_operational_alarm_episodes": non_operational_alarm_episodes,
+            "operational_false_alarm_episodes": operational_false_alarm_episodes,
+            "operational_alarm_opportunities": operational_alarm_opportunities,
+            "operational_false_alarm_rate": safe_ratio(
+                operational_false_alarm_episodes,
+                operational_alarm_opportunities,
+            ),
         },
     }
 
@@ -312,19 +493,20 @@ def main() -> None:
 
     thresholds.to_csv(threshold_path, index=False, encoding="utf-8-sig")
 
-    event_path = project_root / "data" / "raw" / "kelmarsh" / "auxiliary" / "kelmarsh_event_dataset.csv"
-    event_summary = None
-    alarm_episodes = None
-    performance = None
-    if event_path.exists():
-        events = read_event_dataset(event_path)
-        event_summary = evaluate_fault_horizon(detections, events, horizon_days=args.horizon_days)
-        detections = annotate_alarm_horizon_matches(detections, event_summary)
-        alarm_episodes = build_alarm_episodes(detections)
-        performance = summarize_detection_performance(detections, event_summary, alarm_episodes)
-        event_summary.to_csv(event_summary_path, index=False, encoding="utf-8-sig")
-        alarm_episodes.to_csv(episode_path, index=False, encoding="utf-8-sig")
-        performance_path.write_text(json.dumps(performance, indent=2), encoding="utf-8")
+    event_summary = build_event_summary_from_flag_events(
+        project_root,
+        horizon_days=args.horizon_days,
+        event_flag_col="in_event",
+    )
+    detections = annotate_alarm_horizon_matches(detections, event_summary)
+    alarm_episodes = build_alarm_episodes(detections)
+    alarm_episodes = annotate_alarm_episode_horizon_matches(alarm_episodes, event_summary)
+    alarm_episodes = annotate_alarm_episode_operating_context(alarm_episodes, project_root)
+    event_summary = update_event_summary_from_alarm_episodes(event_summary, alarm_episodes)
+    performance = summarize_detection_performance(detections, event_summary, alarm_episodes)
+    event_summary.to_csv(event_summary_path, index=False, encoding="utf-8-sig")
+    alarm_episodes.to_csv(episode_path, index=False, encoding="utf-8-sig")
+    performance_path.write_text(json.dumps(performance, indent=2), encoding="utf-8")
 
     detections.to_csv(detection_path, index=False, encoding="utf-8-sig")
 
@@ -333,11 +515,12 @@ def main() -> None:
         "quantile": args.quantile,
         "min_consecutive": args.min_consecutive,
         "horizon_days": args.horizon_days,
+        "event_source": "flag:in_event",
         "thresholds_path": str(threshold_path.relative_to(project_root)),
         "detections_path": str(detection_path.relative_to(project_root)),
-        "event_summary_path": str(event_summary_path.relative_to(project_root)) if event_summary is not None else None,
-        "alarm_episodes_path": str(episode_path.relative_to(project_root)) if alarm_episodes is not None else None,
-        "performance_path": str(performance_path.relative_to(project_root)) if performance is not None else None,
+        "event_summary_path": str(event_summary_path.relative_to(project_root)),
+        "alarm_episodes_path": str(episode_path.relative_to(project_root)),
+        "performance_path": str(performance_path.relative_to(project_root)),
         "test_detection_rows": int(len(detections)),
         "test_alarm_rate": alarm_rate,
         "performance": performance,
@@ -346,33 +529,30 @@ def main() -> None:
         threshold_path.relative_to(project_root)
     )
     metadata["paths"]["residual_baseline_detections"] = str(detection_path.relative_to(project_root))
-    if event_summary is not None:
-        metadata["paths"]["residual_baseline_event_summary"] = str(
-            event_summary_path.relative_to(project_root)
-        )
-        metadata["paths"]["residual_baseline_alarm_episodes"] = str(
-            episode_path.relative_to(project_root)
-        )
-        metadata["paths"]["residual_baseline_performance"] = str(
-            performance_path.relative_to(project_root)
-        )
+    metadata["paths"]["residual_baseline_event_summary"] = str(event_summary_path.relative_to(project_root))
+    metadata["paths"]["residual_baseline_alarm_episodes"] = str(episode_path.relative_to(project_root))
+    metadata["paths"]["residual_baseline_performance"] = str(performance_path.relative_to(project_root))
     metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print("Run ID:", metadata["run_id"])
     print("Thresholds saved to:", threshold_path)
     print("Detections saved to:", detection_path)
     print("Alarm rate:", f"{alarm_rate:.4%}")
-    if event_summary is not None:
-        detected_count = int(event_summary["detected_in_horizon"].sum())
-        print("Event summary saved to:", event_summary_path)
-        print("Detected events in horizon:", f"{detected_count}/{len(event_summary)}")
-        print("Alarm episodes saved to:", episode_path)
-        print("Performance summary saved to:", performance_path)
-        print("Miss rate:", f"{performance['event_level']['miss_rate']:.4%}")
-        print(
-            "False alarm episode rate:",
-            f"{performance['alarm_episode_level']['false_alarm_episode_rate']:.4%}",
-        )
+    detected_count = int(event_summary["detected_in_horizon"].sum())
+    print("Event source: flag:in_event")
+    print("Event summary saved to:", event_summary_path)
+    print("Detected events in horizon:", f"{detected_count}/{len(event_summary)}")
+    print("Alarm episodes saved to:", episode_path)
+    print("Performance summary saved to:", performance_path)
+    print("Miss rate:", f"{performance['event_level']['miss_rate']:.4%}")
+    print(
+        "False alarm episode rate:",
+        f"{performance['alarm_episode_level']['false_alarm_episode_rate']:.4%}",
+    )
+    print(
+        "Operational false alarm rate:",
+        f"{performance['alarm_episode_level']['operational_false_alarm_rate']:.4%}",
+    )
 
 
 if __name__ == "__main__":
