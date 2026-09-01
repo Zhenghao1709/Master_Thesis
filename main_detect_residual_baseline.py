@@ -7,10 +7,13 @@ from pathlib import Path
 import pandas as pd
 
 from src.config.kelmarsh_config import FREQ_MINUTES, TARGET_COLS
+from src.data.read_event_dataset import read_event_dataset
+from src.data.read_status import read_status_folder
 from src.detection.residuals import (
     apply_residual_baseline_detection,
     fit_residual_quantile_thresholds,
 )
+from src.preprocessing.clean_status import clean_status_df
 
 
 def parse_args() -> argparse.Namespace:
@@ -84,70 +87,190 @@ def turbine_id_from_flag_path(flag_path: Path) -> str:
     return "_".join(part.capitalize() for part in prefix.split("_"))
 
 
-def build_event_summary_from_flag_events(
-    project_root: Path,
-    horizon_days: int,
-    event_flag_col: str = "in_event",
-    start_year: int = 2023,
-    end_year: int = 2024,
-) -> pd.DataFrame:
-    flags_dir = project_root / "data" / "interim" / "kelmarsh" / "flags"
-    if not flags_dir.exists():
-        raise FileNotFoundError(f"Missing flags directory: {flags_dir}")
+def normalise_event_turbine(value: object) -> str | None:
+    if pd.isna(value):
+        return None
+    text = str(value).strip()
+    if text.lower().startswith("kelmarsh_"):
+        return text
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return f"Kelmarsh_{digits}" if digits else None
+
+
+def append_target_interval(
+    rows: list[dict],
+    turbine_id: object,
+    event_start: object,
+    event_end: object,
+    category: str,
+    subcategory: str = "",
+    component: str = "",
+    message: str = "",
+    event_source: str = "",
+) -> None:
+    turbine = normalise_event_turbine(turbine_id)
+    start = pd.to_datetime(event_start, errors="coerce")
+    end = pd.to_datetime(event_end, errors="coerce")
+    if turbine is None or pd.isna(start) or pd.isna(end) or end < start:
+        return
+    if start.year not in {2023, 2024}:
+        return
+
+    rows.append(
+        {
+            "turbine_id": turbine,
+            "event_start": start,
+            "event_end": end,
+            "category": str(category),
+            "subcategory": str(subcategory),
+            "component": str(component),
+            "message": str(message),
+            "event_source": str(event_source),
+        }
+    )
+
+
+def merge_target_event_intervals(events: pd.DataFrame, horizon_days: int) -> pd.DataFrame:
+    columns = [
+        "event_index",
+        "turbine_id",
+        "event_start",
+        "event_end",
+        "category",
+        "subcategory",
+        "component",
+        "message",
+        "event_source",
+        "horizon_start",
+        "detected_in_horizon",
+        "first_alarm_time",
+        "lead_time_hours",
+        "alarm_count_in_horizon",
+        "alarm_targets",
+    ]
+    if events.empty:
+        return pd.DataFrame(columns=columns)
 
     horizon = pd.Timedelta(days=horizon_days)
-    rows = []
-    for flag_path in sorted(flags_dir.glob("*_with_flags.parquet")):
-        turbine_id = turbine_id_from_flag_path(flag_path)
-        intervals = intervals_from_flag_file(
-            flag_path,
-            flag_cols=[event_flag_col],
-            start_year=start_year,
-            end_year=end_year,
-        ).get(event_flag_col, [])
+    events = events.copy()
+    events["event_start"] = pd.to_datetime(events["event_start"], errors="coerce")
+    events["event_end"] = pd.to_datetime(events["event_end"], errors="coerce")
+    events = events.dropna(subset=["event_start", "event_end", "turbine_id"])
+    events = events.sort_values(["turbine_id", "event_start", "event_end"]).reset_index(drop=True)
 
-        for event_start, event_end in intervals:
-            rows.append(
-                {
-                    "turbine_id": turbine_id,
-                    "event_start": event_start,
-                    "event_end": event_end,
-                    "category": "status_flag_event",
-                    "component": "",
-                    "message": event_flag_col,
-                    "event_source": f"flag:{event_flag_col}",
-                    "horizon_start": event_start - horizon,
-                    "detected_in_horizon": False,
-                    "first_alarm_time": pd.NaT,
-                    "lead_time_hours": pd.NA,
-                    "alarm_count_in_horizon": 0,
-                    "alarm_targets": "",
-                }
+    merged_rows = []
+    for turbine_id, group in events.groupby("turbine_id", sort=False):
+        current = None
+        for _, row in group.iterrows():
+            if current is None:
+                current = row.to_dict()
+                continue
+
+            if row["event_start"] <= current["event_end"] + pd.Timedelta(minutes=FREQ_MINUTES):
+                current["event_end"] = max(current["event_end"], row["event_end"])
+                for col in ["category", "subcategory", "component", "message", "event_source"]:
+                    values = {
+                        value
+                        for value in [*str(current.get(col, "")).split("; "), str(row.get(col, ""))]
+                        if value and value != "nan"
+                    }
+                    current[col] = "; ".join(sorted(values))
+            else:
+                merged_rows.append(current)
+                current = row.to_dict()
+        if current is not None:
+            merged_rows.append(current)
+
+    out = pd.DataFrame(merged_rows).sort_values(["turbine_id", "event_start", "event_end"]).reset_index(drop=True)
+    out.insert(0, "event_index", range(len(out)))
+    out["horizon_start"] = out["event_start"] - horizon
+    out["detected_in_horizon"] = False
+    out["first_alarm_time"] = pd.NaT
+    out["lead_time_hours"] = pd.NA
+    out["alarm_count_in_horizon"] = 0
+    out["alarm_targets"] = ""
+    return out[columns]
+
+
+def build_target_event_summary(
+    project_root: Path,
+    horizon_days: int,
+) -> pd.DataFrame:
+    rows = []
+
+    event_path = project_root / "data" / "raw" / "kelmarsh" / "auxiliary" / "kelmarsh_event_dataset.csv"
+    if event_path.exists():
+        events = read_event_dataset(event_path)
+        events["category_lower"] = events["Category"].astype(str).str.strip().str.casefold()
+        events["subcategory_lower"] = events["Subcategory"].astype(str).str.strip().str.casefold()
+
+        auxiliary_targets = events[
+            events["category_lower"].eq("fault")
+            | (
+                events["category_lower"].eq("maintenance")
+                & events["subcategory_lower"].isin({"corrective", "corrective - merged"})
+            )
+        ].copy()
+
+        for _, row in auxiliary_targets.iterrows():
+            append_target_interval(
+                rows,
+                turbine_id=row.get("Turbine"),
+                event_start=row.get("Timestamp start"),
+                event_end=row.get("Timestamp end"),
+                category=row.get("Category", ""),
+                subcategory=row.get("Subcategory", ""),
+                component=row.get("Component", ""),
+                message=row.get("Message stack", ""),
+                event_source="auxiliary_event_dataset",
             )
 
-    if not rows:
-        return pd.DataFrame(
-            columns=[
-                "event_index",
-                "turbine_id",
-                "event_start",
-                "event_end",
-                "category",
-                "component",
-                "message",
-                "event_source",
-                "horizon_start",
-                "detected_in_horizon",
-                "first_alarm_time",
-                "lead_time_hours",
-                "alarm_count_in_horizon",
-                "alarm_targets",
-            ]
-        )
+    status_root = project_root / "data" / "raw" / "kelmarsh" / "status"
+    target_iec_categories = {
+        "forced outage",
+        "out of electrical specification",
+        "out of environmental specification",
+    }
+    long_warning_min_duration = pd.Timedelta(days=7)
+    if status_root.exists():
+        for status_folder in sorted(p for p in status_root.iterdir() if p.is_dir()):
+            turbine_id = status_folder.name
+            status = clean_status_df(read_status_folder(status_folder, turbine_id=turbine_id))
+            stop_targets = status[
+                status["Status"].astype(str).str.strip().str.casefold().eq("stop")
+                & status["IEC category"].astype(str).str.strip().str.casefold().isin(target_iec_categories)
+            ].copy()
+            warning_targets = status[
+                status["Status"].astype(str).str.strip().str.casefold().eq("warning")
+                & (status["Timestamp end"] - status["Timestamp start"] >= long_warning_min_duration)
+            ].copy()
 
-    out = pd.DataFrame(rows).sort_values(["turbine_id", "event_start", "event_end"]).reset_index(drop=True)
-    out.insert(0, "event_index", range(len(out)))
-    return out
+            for _, row in stop_targets.iterrows():
+                append_target_interval(
+                    rows,
+                    turbine_id=row.get("turbine_id"),
+                    event_start=row.get("Timestamp start"),
+                    event_end=row.get("Timestamp end"),
+                    category="Status Stop",
+                    subcategory=row.get("IEC category", ""),
+                    component=row.get("Service contract category", ""),
+                    message=row.get("Message", ""),
+                    event_source="status_stop_target",
+                )
+            for _, row in warning_targets.iterrows():
+                append_target_interval(
+                    rows,
+                    turbine_id=row.get("turbine_id"),
+                    event_start=row.get("Timestamp start"),
+                    event_end=row.get("Timestamp end"),
+                    category="Status Warning",
+                    subcategory="duration >= 7 days",
+                    component=row.get("Service contract category", ""),
+                    message=row.get("Message", ""),
+                    event_source="status_long_warning_target",
+                )
+
+    return merge_target_event_intervals(pd.DataFrame(rows), horizon_days=horizon_days)
 
 
 def annotate_alarm_horizon_matches(
@@ -330,6 +453,60 @@ def overlaps_any_interval(
     return False
 
 
+def non_full_performance_intervals_from_status(
+    project_root: Path,
+    turbine_id: str,
+    start_year: int = 2023,
+    end_year: int = 2024,
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    status_folder = project_root / "data" / "raw" / "kelmarsh" / "status" / turbine_id
+    if not status_folder.exists():
+        return []
+
+    status = read_status_folder(status_folder, turbine_id=turbine_id)
+    status["Timestamp start"] = pd.to_datetime(status["Timestamp start"], errors="coerce")
+    status["Timestamp end"] = pd.to_datetime(status["Timestamp end"], errors="coerce")
+    iec = status["IEC category"].astype(str).str.strip().str.casefold()
+    status = status[
+        status["Timestamp start"].notna()
+        & status["Timestamp end"].notna()
+        & status["Timestamp start"].dt.year.between(start_year, end_year)
+        & ~iec.eq("full performance")
+    ].copy()
+
+    return list(zip(status["Timestamp start"], status["Timestamp end"]))
+
+
+def informational_environmental_spec_intervals_from_status(
+    project_root: Path,
+    turbine_id: str,
+    start_year: int = 2023,
+    end_year: int = 2024,
+    buffer_hours: int = 1,
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    status_folder = project_root / "data" / "raw" / "kelmarsh" / "status" / turbine_id
+    if not status_folder.exists():
+        return []
+
+    status = read_status_folder(status_folder, turbine_id=turbine_id)
+    status["Timestamp start"] = pd.to_datetime(status["Timestamp start"], errors="coerce")
+    status["Timestamp end"] = pd.to_datetime(status["Timestamp end"], errors="coerce")
+    status_text = status["Status"].astype(str).str.strip().str.casefold()
+    iec = status["IEC category"].astype(str).str.strip().str.casefold()
+    status = status[
+        status["Timestamp start"].notna()
+        & status["Timestamp end"].notna()
+        & status["Timestamp start"].dt.year.between(start_year, end_year)
+        & status_text.isin(["information", "informational"])
+        & iec.eq("out of environmental specification")
+    ].copy()
+
+    buffer = pd.Timedelta(hours=buffer_hours)
+    status["Timestamp start"] = status["Timestamp start"] - buffer
+    status["Timestamp end"] = status["Timestamp end"] + buffer
+    return list(zip(status["Timestamp start"], status["Timestamp end"]))
+
+
 def annotate_alarm_episode_operating_context(
     alarm_episodes: pd.DataFrame,
     project_root: Path,
@@ -345,6 +522,8 @@ def annotate_alarm_episode_operating_context(
     }
     for output_col in context_flags:
         out[output_col] = False
+    out["in_non_full_performance_interval"] = False
+    out["in_information_environmental_buffer_interval"] = False
     out["in_non_operational_interval"] = False
     out["is_operational_false_alarm"] = False
 
@@ -359,6 +538,14 @@ def annotate_alarm_episode_operating_context(
     for turbine_id, idx in out.groupby("turbine_id", sort=False).groups.items():
         flag_path = flags_dir / f"{str(turbine_id).lower()}_with_flags.parquet"
         intervals_by_flag = intervals_from_flag_file(flag_path, flag_cols)
+        non_full_performance_intervals = non_full_performance_intervals_from_status(
+            project_root,
+            turbine_id=str(turbine_id),
+        )
+        information_environmental_intervals = informational_environmental_spec_intervals_from_status(
+            project_root,
+            turbine_id=str(turbine_id),
+        )
 
         for row_index in idx:
             start = out.loc[row_index, "start_time"]
@@ -372,8 +559,21 @@ def annotate_alarm_episode_operating_context(
                     end,
                     intervals_by_flag.get(flag_col, []),
                 )
+            out.loc[row_index, "in_non_full_performance_interval"] = overlaps_any_interval(
+                start,
+                end,
+                non_full_performance_intervals,
+            )
+            out.loc[row_index, "in_information_environmental_buffer_interval"] = overlaps_any_interval(
+                start,
+                end,
+                information_environmental_intervals,
+            )
 
-    non_operational_cols = list(context_flags.keys())
+    non_operational_cols = list(context_flags.keys()) + [
+        "in_non_full_performance_interval",
+        "in_information_environmental_buffer_interval",
+    ]
     out["in_non_operational_interval"] = out[non_operational_cols].any(axis=1)
     out["is_operational_false_alarm"] = (
         ~out["in_fault_horizon"].fillna(False).astype(bool)
@@ -493,10 +693,9 @@ def main() -> None:
 
     thresholds.to_csv(threshold_path, index=False, encoding="utf-8-sig")
 
-    event_summary = build_event_summary_from_flag_events(
+    event_summary = build_target_event_summary(
         project_root,
         horizon_days=args.horizon_days,
-        event_flag_col="in_event",
     )
     detections = annotate_alarm_horizon_matches(detections, event_summary)
     alarm_episodes = build_alarm_episodes(detections)
@@ -515,7 +714,11 @@ def main() -> None:
         "quantile": args.quantile,
         "min_consecutive": args.min_consecutive,
         "horizon_days": args.horizon_days,
-        "event_source": "flag:in_event",
+        "event_source": (
+            "auxiliary Fault; auxiliary Maintenance Corrective/Corrective - merged; "
+            "status Stop with IEC Forced outage/Out of Electrical Specification/"
+            "Out of Environmental Specification; status Warning with duration >= 7 days"
+        ),
         "thresholds_path": str(threshold_path.relative_to(project_root)),
         "detections_path": str(detection_path.relative_to(project_root)),
         "event_summary_path": str(event_summary_path.relative_to(project_root)),
@@ -539,7 +742,7 @@ def main() -> None:
     print("Detections saved to:", detection_path)
     print("Alarm rate:", f"{alarm_rate:.4%}")
     detected_count = int(event_summary["detected_in_horizon"].sum())
-    print("Event source: flag:in_event")
+    print("Event source: target event definition")
     print("Event summary saved to:", event_summary_path)
     print("Detected events in horizon:", f"{detected_count}/{len(event_summary)}")
     print("Alarm episodes saved to:", episode_path)
