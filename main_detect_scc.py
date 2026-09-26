@@ -18,6 +18,8 @@ from main_detect_residual_baseline import (
     update_event_summary_from_alarm_episodes,
 )
 
+SCC_MIN_CONSECUTIVE = 6
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -28,13 +30,7 @@ def parse_args() -> argparse.Namespace:
         "--k",
         type=float,
         default=3.0,
-        help="Control limit multiplier for mean + k * std of validation absolute residuals.",
-    )
-    parser.add_argument(
-        "--min-consecutive",
-        type=int,
-        default=6,
-        help="Minimum consecutive anomaly points required to raise an alarm.",
+        help="Control limit multiplier for abs(mean(validation error) + k * std(validation error)).",
     )
     parser.add_argument(
         "--horizon-days",
@@ -51,10 +47,8 @@ def format_number(value: float) -> str:
 
 def main() -> None:
     args = parse_args()
-    if args.k <= 0:
-        raise ValueError("--k must be positive")
-    if args.min_consecutive < 1:
-        raise ValueError("--min-consecutive must be at least 1")
+    if args.k < 0:
+        raise ValueError("--k must be non-negative")
     if args.horizon_days < 1:
         raise ValueError("--horizon-days must be at least 1")
 
@@ -79,16 +73,16 @@ def main() -> None:
         val_predictions,
         target_cols=target_cols,
         k=args.k,
-        residual_mode="absolute",
+        residual_mode="signed_error",
     )
     detections = apply_scc_detection(
         test_predictions,
         thresholds=thresholds,
         target_cols=target_cols,
-        min_consecutive=args.min_consecutive,
+        min_consecutive=SCC_MIN_CONSECUTIVE,
     )
 
-    suffix = f"abs_meanstd_k{format_number(args.k)}_c{args.min_consecutive}"
+    suffix = f"signed_meanstd_abslimit_k{format_number(args.k)}_c{SCC_MIN_CONSECUTIVE}"
     threshold_path = result_dir / f"scc_thresholds_{suffix}.csv"
     detection_path = result_dir / f"scc_detections_{suffix}.csv"
     event_summary_path = result_dir / f"scc_event_summary_{suffix}.csv"
@@ -111,11 +105,12 @@ def main() -> None:
     performance_path.write_text(json.dumps(performance, indent=2), encoding="utf-8")
 
     metadata["scc_detection"] = {
-        "residual_mode": "absolute",
+        "residual_mode": "signed_error",
+        "threshold_rule": "abs(mean(validation_error) + k * std(validation_error))",
         "center_type": "mean",
         "scale_type": "std",
         "k": args.k,
-        "min_consecutive": args.min_consecutive,
+        "min_consecutive": SCC_MIN_CONSECUTIVE,
         "horizon_days": args.horizon_days,
         "thresholds_path": str(threshold_path.relative_to(project_root)),
         "detections_path": str(detection_path.relative_to(project_root)),

@@ -10,26 +10,26 @@ def fit_scc_thresholds(
     validation_predictions: pd.DataFrame,
     target_cols: list[str],
     k: float = 3.0,
-    residual_mode: str = "absolute",
+    residual_mode: str = "signed_error",
 ) -> pd.DataFrame:
-    if k <= 0:
-        raise ValueError("k must be positive")
-    if residual_mode != "absolute":
-        raise ValueError("Only absolute residual SCC is currently implemented.")
+    if k < 0:
+        raise ValueError("k must be non-negative")
+    if residual_mode != "signed_error":
+        raise ValueError("Only signed-error SCC is currently implemented.")
 
     rows = []
     for target_col in target_cols:
-        residual_col = resolve_prediction_column(validation_predictions, "residual", target_col)
-        residuals = pd.to_numeric(validation_predictions[residual_col], errors="coerce").dropna()
-        if residuals.empty:
-            raise ValueError(f"No residual values found for target: {target_col}")
+        error_col = resolve_prediction_column(validation_predictions, "error", target_col)
+        errors = pd.to_numeric(validation_predictions[error_col], errors="coerce").dropna()
+        if errors.empty:
+            raise ValueError(f"No error values found for target: {target_col}")
 
-        center = float(residuals.mean())
-        scale = float(residuals.std(ddof=0))
+        center = float(errors.mean())
+        scale = float(errors.std(ddof=0))
         rows.append(
             {
                 "target": target_col,
-                "residual_column": residual_col,
+                "error_column": error_col,
                 "method": "scc",
                 "residual_mode": residual_mode,
                 "center_type": "mean",
@@ -37,8 +37,8 @@ def fit_scc_thresholds(
                 "center": center,
                 "scale": scale,
                 "k": float(k),
-                "threshold": center + float(k) * scale,
-                "validation_samples": int(len(residuals)),
+                "threshold": abs(center + float(k) * scale),
+                "validation_samples": int(len(errors)),
             }
         )
 
@@ -82,7 +82,7 @@ def apply_scc_detection(
         )
         part["target"] = target_col
         part["threshold"] = threshold
-        part["is_anomaly"] = part["residual"] > threshold
+        part["is_anomaly"] = part["error"].abs() > threshold
         rows.append(part)
 
     out = pd.concat(rows, ignore_index=True)

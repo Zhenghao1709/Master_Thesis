@@ -32,6 +32,7 @@ models/**/*.ckpt
 results/kelmarsh/logs/**
 results/kelmarsh/predictions/**
 results/kelmarsh/experiments/**
+results/kelmarsh/figures/thesis/latex_build/**
 
 
 # Heavy artifacts

@@ -1,0 +1,13 @@
+﻿experiment,setting,detected_events,recall_%,precision_%,f1_%,op_FA_%,true_alarm_episodes,op_FA_episodes
+"Old abs Gaussian, W72",abs_w72_q990_vm5_c6,425/433,98.15,79.58,87.89,20.42,600,154
+"Signed Gaussian, W72",signed_w72_q990_vm5_c6,426/433,98.38,75.11,85.19,24.89,655,217
+"Folded-normal abs, W72",foldedabs_w72_q990_vm5_c6,426/433,98.38,75.57,85.48,24.43,662,214
+"Hybrid H folded/A Gaussian, W72",hybridabs_w72_q990_vm5_c6,427/433,98.61,73.85,84.46,26.15,1545,547
+"Hybrid H folded/A Gaussian, vm1, W72",hybridabs_w72_q990_vm1_c6,216/433,49.88,46.93,48.36,53.07,237,268
+"A mean multiplier 1.5, W72",abs_am1p5_w72_q990_vm5_c6,425/433,98.15,78.77,87.4,21.23,601,162
+"A mean multiplier 2.5, W72",abs_am2p5_w72_q990_vm5_c6,426/433,98.38,77.43,86.66,22.57,621,181
+"A mean multiplier 5.0, W72",abs_am5_w72_q990_vm5_c6,427/433,98.61,75.22,85.35,24.78,1175,387
+"Old abs Gaussian, W36",abs_w36_q990_vm5_c6,426/433,98.38,76.35,85.98,23.65,749,232
+"Signed Gaussian, W36",signed_w36_q990_vm5_c6,430/433,99.31,72.27,83.66,27.73,1527,586
+"Folded-normal abs, W36",foldedabs_w36_q990_vm5_c6,430/433,99.31,72.5,83.81,27.5,1534,582
+"Hybrid H folded/A Gaussian, W36",hybridabs_w36_q990_vm5_c6,430/433,99.31,71.12,82.88,28.88,2022,821

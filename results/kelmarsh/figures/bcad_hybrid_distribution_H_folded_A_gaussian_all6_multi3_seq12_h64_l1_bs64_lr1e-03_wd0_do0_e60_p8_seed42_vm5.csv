@@ -1,0 +1,4 @@
+﻿target,H_distribution,H_source_signed_mu,H_source_signed_std,A_distribution,A_mean,A_std,variance_multiplier
+Generator bearing front temperature,folded_normal,-0.008351054222462365,0.26552110326026246,gaussian,0.17400932960757184,0.44884189688273834,5.0
+Stator temperature 1,folded_normal,0.01620596288331702,0.5890710875263749,gaussian,0.3694255630478557,1.0266243273465987,5.0
+Rear bearing temperature,folded_normal,-0.05730042996996856,1.0789783310017838,gaussian,0.7866512723339651,1.6562827400009943,5.0

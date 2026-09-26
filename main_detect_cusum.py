@@ -18,6 +18,8 @@ from main_detect_residual_baseline import (
     update_event_summary_from_alarm_episodes,
 )
 
+CUSUM_MIN_CONSECUTIVE = 1
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -48,12 +50,6 @@ def parse_args() -> argparse.Namespace:
         help="How to standardize validation/test errors before CUSUM.",
     )
     parser.add_argument(
-        "--min-consecutive",
-        type=int,
-        default=6,
-        help="Minimum consecutive CUSUM anomaly points required to raise an alarm.",
-    )
-    parser.add_argument(
         "--horizon-days",
         type=int,
         default=7,
@@ -63,6 +59,12 @@ def parse_args() -> argparse.Namespace:
         "--no-reset",
         action="store_true",
         help="Do not reset CUSUM statistics after an alarm point.",
+    )
+    parser.add_argument(
+        "--episode-merge-gap-hours",
+        type=float,
+        default=0.0,
+        help="Merge alarm episodes for the same turbine/target when the gap is within this many hours.",
     )
     return parser.parse_args()
 
@@ -79,10 +81,10 @@ def main() -> None:
         raise ValueError("--decision-threshold must be positive")
     if args.threshold_quantile is not None and not 0 < args.threshold_quantile < 1:
         raise ValueError("--threshold-quantile must be between 0 and 1")
-    if args.min_consecutive < 1:
-        raise ValueError("--min-consecutive must be at least 1")
     if args.horizon_days < 1:
         raise ValueError("--horizon-days must be at least 1")
+    if args.episode_merge_gap_hours < 0:
+        raise ValueError("--episode-merge-gap-hours must be non-negative")
 
     project_root = Path(__file__).resolve().parent
     result_dir, metadata_path, metadata = find_experiment(project_root, args.run_id)
@@ -113,7 +115,7 @@ def main() -> None:
         test_predictions,
         reference_stats=reference_stats,
         target_cols=target_cols,
-        min_consecutive=args.min_consecutive,
+        min_consecutive=CUSUM_MIN_CONSECUTIVE,
         reset_on_alarm=not args.no_reset,
     )
 
@@ -125,8 +127,10 @@ def main() -> None:
     )
     suffix = (
         f"twosided_{args.scale_type}_k{format_number(args.reference_value)}_"
-        f"{threshold_label}_c{args.min_consecutive}_{reset_label}"
+        f"{threshold_label}_{reset_label}"
     )
+    if args.episode_merge_gap_hours > 0:
+        suffix = f"{suffix}_gap{format_number(args.episode_merge_gap_hours)}h"
     threshold_path = result_dir / f"cusum_thresholds_{suffix}.csv"
     detection_path = result_dir / f"cusum_detections_{suffix}.csv"
     event_summary_path = result_dir / f"cusum_event_summary_{suffix}.csv"
@@ -137,7 +141,10 @@ def main() -> None:
 
     event_summary = build_target_event_summary(project_root, horizon_days=args.horizon_days)
     detections = annotate_alarm_horizon_matches(detections, event_summary)
-    alarm_episodes = build_alarm_episodes(detections)
+    alarm_episodes = build_alarm_episodes(
+        detections,
+        merge_gap_hours=args.episode_merge_gap_hours,
+    )
     alarm_episodes = annotate_alarm_episode_horizon_matches(alarm_episodes, event_summary)
     alarm_episodes = annotate_alarm_episode_operating_context(alarm_episodes, project_root)
     event_summary = update_event_summary_from_alarm_episodes(event_summary, alarm_episodes)
@@ -160,9 +167,11 @@ def main() -> None:
         ),
         "threshold_type": "validation_cusum_quantile" if args.threshold_quantile is not None else "fixed",
         "threshold_quantile": args.threshold_quantile,
-        "min_consecutive": args.min_consecutive,
+        "min_consecutive": CUSUM_MIN_CONSECUTIVE,
+        "consecutive_rule": "disabled",
         "horizon_days": args.horizon_days,
         "reset_on_alarm": not args.no_reset,
+        "episode_merge_gap_hours": args.episode_merge_gap_hours,
         "thresholds_path": str(threshold_path.relative_to(project_root)),
         "detections_path": str(detection_path.relative_to(project_root)),
         "event_summary_path": str(event_summary_path.relative_to(project_root)),

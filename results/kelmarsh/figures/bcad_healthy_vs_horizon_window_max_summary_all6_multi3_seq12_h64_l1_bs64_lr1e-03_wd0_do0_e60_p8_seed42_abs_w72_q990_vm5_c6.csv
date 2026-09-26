@@ -1,0 +1,7 @@
+target,group,n_windows,mean,median,q95,q99,max
+Generator bearing front temperature,healthy_validation_window_max,136622,0.9789473351989878,0.8664715863660533,1.9274094470664025,2.720949830577574,7.001677123794366
+Generator bearing front temperature,fault_horizon_window_max,0,,,,,
+Stator temperature 1,healthy_validation_window_max,136622,2.0143288789304363,2.042780101808603,3.485454355986292,4.025555312792108,5.095713646390891
+Stator temperature 1,fault_horizon_window_max,0,,,,,
+Rear bearing temperature,healthy_validation_window_max,136622,3.2403732780678713,3.073349747452312,5.452950274470823,7.879360132765214,16.393363673289514
+Rear bearing temperature,fault_horizon_window_max,80555,15.517862764749399,10.54513477047294,42.85186285268222,56.56795431562841,254.18991912169304

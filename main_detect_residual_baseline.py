@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from src.config.kelmarsh_config import FREQ_MINUTES, TARGET_COLS
@@ -107,13 +108,17 @@ def append_target_interval(
     component: str = "",
     message: str = "",
     event_source: str = "",
+    evaluation_start: object = "2023-01-01",
+    evaluation_end_exclusive: object = "2025-01-01",
 ) -> None:
     turbine = normalise_event_turbine(turbine_id)
     start = pd.to_datetime(event_start, errors="coerce")
     end = pd.to_datetime(event_end, errors="coerce")
     if turbine is None or pd.isna(start) or pd.isna(end) or end < start:
         return
-    if start.year not in {2023, 2024}:
+    period_start = pd.Timestamp(evaluation_start)
+    period_end = pd.Timestamp(evaluation_end_exclusive)
+    if not (period_start <= start < period_end):
         return
 
     rows.append(
@@ -195,6 +200,8 @@ def merge_target_event_intervals(events: pd.DataFrame, horizon_days: int) -> pd.
 def build_target_event_summary(
     project_root: Path,
     horizon_days: int,
+    evaluation_start: object = "2023-01-01",
+    evaluation_end_exclusive: object = "2025-01-01",
 ) -> pd.DataFrame:
     rows = []
 
@@ -223,6 +230,8 @@ def build_target_event_summary(
                 component=row.get("Component", ""),
                 message=row.get("Message stack", ""),
                 event_source="auxiliary_event_dataset",
+                evaluation_start=evaluation_start,
+                evaluation_end_exclusive=evaluation_end_exclusive,
             )
 
     status_root = project_root / "data" / "raw" / "kelmarsh" / "status"
@@ -256,6 +265,8 @@ def build_target_event_summary(
                     component=row.get("Service contract category", ""),
                     message=row.get("Message", ""),
                     event_source="status_stop_target",
+                    evaluation_start=evaluation_start,
+                    evaluation_end_exclusive=evaluation_end_exclusive,
                 )
             for _, row in warning_targets.iterrows():
                 append_target_interval(
@@ -268,6 +279,8 @@ def build_target_event_summary(
                     component=row.get("Service contract category", ""),
                     message=row.get("Message", ""),
                     event_source="status_long_warning_target",
+                    evaluation_start=evaluation_start,
+                    evaluation_end_exclusive=evaluation_end_exclusive,
                 )
 
     return merge_target_event_intervals(pd.DataFrame(rows), horizon_days=horizon_days)
@@ -297,6 +310,7 @@ def annotate_alarm_horizon_matches(
 def build_alarm_episodes(
     detections: pd.DataFrame,
     freq_minutes: int = FREQ_MINUTES,
+    merge_gap_hours: float = 0.0,
 ) -> pd.DataFrame:
     alarms = detections.loc[detections["is_alarm"]].copy()
     if alarms.empty:
@@ -329,6 +343,32 @@ def build_alarm_episodes(
         .sort_values(["turbine_id", "target", "start_time"])
         .reset_index(drop=True)
     )
+    if merge_gap_hours > 0 and not episodes.empty:
+        merge_delta = pd.Timedelta(hours=merge_gap_hours)
+        merged_rows = []
+        for (_, target), group in episodes.groupby(["turbine_id", "target"], sort=False):
+            current = None
+            for _, row in group.sort_values("start_time").iterrows():
+                if current is None:
+                    current = row.to_dict()
+                    continue
+
+                if row["start_time"] <= current["end_time"] + merge_delta:
+                    current["end_time"] = max(current["end_time"], row["end_time"])
+                    current["alarm_points"] += int(row["alarm_points"])
+                    current["in_fault_horizon"] = bool(current["in_fault_horizon"]) or bool(
+                        row["in_fault_horizon"]
+                    )
+                else:
+                    merged_rows.append(current)
+                    current = row.to_dict()
+            if current is not None:
+                merged_rows.append(current)
+
+        episodes = pd.DataFrame(merged_rows).sort_values(
+            ["turbine_id", "target", "start_time"]
+        ).reset_index(drop=True)
+        episodes["episode_id"] = range(len(episodes))
     return episodes
 
 
@@ -336,6 +376,7 @@ def annotate_alarm_episode_horizon_matches(
     alarm_episodes: pd.DataFrame,
     event_summary: pd.DataFrame,
     freq_minutes: int = FREQ_MINUTES,
+    trigger_time_col: str | None = None,
 ) -> pd.DataFrame:
     out = alarm_episodes.copy()
     out["in_fault_horizon"] = False
@@ -344,6 +385,10 @@ def annotate_alarm_episode_horizon_matches(
 
     out["start_time"] = pd.to_datetime(out["start_time"], errors="coerce")
     out["end_time"] = pd.to_datetime(out["end_time"], errors="coerce")
+    if trigger_time_col is not None:
+        if trigger_time_col not in out.columns:
+            raise ValueError(f"Missing episode trigger time column: {trigger_time_col}")
+        out[trigger_time_col] = pd.to_datetime(out[trigger_time_col], errors="coerce")
     event_summary = event_summary.copy()
     event_summary["horizon_start"] = pd.to_datetime(event_summary["horizon_start"], errors="coerce")
     event_summary["event_start"] = pd.to_datetime(event_summary["event_start"], errors="coerce")
@@ -358,6 +403,8 @@ def annotate_alarm_episode_horizon_matches(
             & (out["start_time"] < event["event_start"])
             & (episode_end_exclusive >= event["horizon_start"])
         )
+        if trigger_time_col is not None:
+            mask &= out[trigger_time_col] < event["event_start"]
         out.loc[mask, "in_fault_horizon"] = True
 
     return out
@@ -367,6 +414,7 @@ def update_event_summary_from_alarm_episodes(
     event_summary: pd.DataFrame,
     alarm_episodes: pd.DataFrame,
     freq_minutes: int = FREQ_MINUTES,
+    trigger_time_col: str = "start_time",
 ) -> pd.DataFrame:
     out = event_summary.copy()
     if out.empty:
@@ -377,6 +425,9 @@ def update_event_summary_from_alarm_episodes(
     episodes = alarm_episodes.copy()
     episodes["start_time"] = pd.to_datetime(episodes["start_time"], errors="coerce")
     episodes["end_time"] = pd.to_datetime(episodes["end_time"], errors="coerce")
+    if trigger_time_col not in episodes.columns:
+        raise ValueError(f"Missing episode trigger time column: {trigger_time_col}")
+    episodes[trigger_time_col] = pd.to_datetime(episodes[trigger_time_col], errors="coerce")
     episode_end_exclusive = episodes["end_time"] + pd.Timedelta(minutes=freq_minutes)
 
     for index, event in out.iterrows():
@@ -384,6 +435,7 @@ def update_event_summary_from_alarm_episodes(
             (episodes["turbine_id"] == event["turbine_id"])
             & (episodes["start_time"] < event["event_start"])
             & (episode_end_exclusive >= event["horizon_start"])
+            & (episodes[trigger_time_col] < event["event_start"])
         ].copy()
 
         if overlapping.empty:
@@ -395,7 +447,7 @@ def update_event_summary_from_alarm_episodes(
             out.loc[index, "alarm_episode_count_in_horizon"] = 0
             continue
 
-        first_alarm_time = overlapping["start_time"].min()
+        first_alarm_time = overlapping[trigger_time_col].min()
         out.loc[index, "detected_in_horizon"] = True
         out.loc[index, "first_alarm_time"] = first_alarm_time
         out.loc[index, "lead_time_hours"] = (
@@ -453,6 +505,68 @@ def overlaps_any_interval(
     return False
 
 
+def prepare_interval_bounds(
+    intervals: list[tuple[pd.Timestamp, pd.Timestamp]],
+) -> tuple[np.ndarray, np.ndarray]:
+    valid_intervals = [
+        (pd.Timestamp(interval_start), pd.Timestamp(interval_end))
+        for interval_start, interval_end in intervals
+        if pd.notna(interval_start) and pd.notna(interval_end)
+    ]
+    if not valid_intervals:
+        return np.array([], dtype="datetime64[ns]"), np.array([], dtype="datetime64[ns]")
+
+    valid_intervals.sort(key=lambda item: item[0])
+    starts = np.array([item[0].to_datetime64() for item in valid_intervals], dtype="datetime64[ns]")
+    ends = np.array([item[1].to_datetime64() for item in valid_intervals], dtype="datetime64[ns]")
+    return starts, np.maximum.accumulate(ends)
+
+
+def overlaps_prepared_intervals(
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    bounds: tuple[np.ndarray, np.ndarray],
+) -> bool:
+    starts, prefix_max_ends = bounds
+    if len(starts) == 0 or pd.isna(start) or pd.isna(end):
+        return False
+
+    end_value = np.datetime64(pd.Timestamp(end).to_datetime64())
+    start_value = np.datetime64(pd.Timestamp(start).to_datetime64())
+    candidate_count = np.searchsorted(starts, end_value, side="left")
+    if candidate_count == 0:
+        return False
+    return bool(prefix_max_ends[candidate_count - 1] > start_value)
+
+
+def overlaps_many_prepared_intervals(
+    starts_to_check: pd.Series,
+    ends_to_check: pd.Series,
+    bounds: tuple[np.ndarray, np.ndarray],
+) -> np.ndarray:
+    interval_starts, prefix_max_ends = bounds
+    result = np.zeros(len(starts_to_check), dtype=bool)
+    if len(interval_starts) == 0 or len(starts_to_check) == 0:
+        return result
+
+    valid = starts_to_check.notna().to_numpy() & ends_to_check.notna().to_numpy()
+    if not valid.any():
+        return result
+
+    starts = starts_to_check.to_numpy(dtype="datetime64[ns]")
+    ends = ends_to_check.to_numpy(dtype="datetime64[ns]")
+    candidate_counts = np.searchsorted(interval_starts, ends[valid], side="left")
+    valid_positions = np.flatnonzero(valid)
+    has_candidate = candidate_counts > 0
+    if not has_candidate.any():
+        return result
+
+    positions = valid_positions[has_candidate]
+    counts = candidate_counts[has_candidate]
+    result[positions] = prefix_max_ends[counts - 1] > starts[positions]
+    return result
+
+
 def non_full_performance_intervals_from_status(
     project_root: Path,
     turbine_id: str,
@@ -482,7 +596,7 @@ def informational_environmental_spec_intervals_from_status(
     turbine_id: str,
     start_year: int = 2023,
     end_year: int = 2024,
-    buffer_hours: int = 1,
+    buffer_hours: int = 6,
 ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     status_folder = project_root / "data" / "raw" / "kelmarsh" / "status" / turbine_id
     if not status_folder.exists():
@@ -538,6 +652,10 @@ def annotate_alarm_episode_operating_context(
     for turbine_id, idx in out.groupby("turbine_id", sort=False).groups.items():
         flag_path = flags_dir / f"{str(turbine_id).lower()}_with_flags.parquet"
         intervals_by_flag = intervals_from_flag_file(flag_path, flag_cols)
+        bounds_by_flag = {
+            flag_col: prepare_interval_bounds(intervals)
+            for flag_col, intervals in intervals_by_flag.items()
+        }
         non_full_performance_intervals = non_full_performance_intervals_from_status(
             project_root,
             turbine_id=str(turbine_id),
@@ -546,29 +664,32 @@ def annotate_alarm_episode_operating_context(
             project_root,
             turbine_id=str(turbine_id),
         )
+        non_full_performance_bounds = prepare_interval_bounds(non_full_performance_intervals)
+        information_environmental_bounds = prepare_interval_bounds(information_environmental_intervals)
 
-        for row_index in idx:
-            start = out.loc[row_index, "start_time"]
-            end = out.loc[row_index, "end_time"] + pd.Timedelta(minutes=freq_minutes)
-            if pd.isna(start) or pd.isna(end):
-                continue
+        idx_list = list(idx)
+        starts = out.loc[idx_list, "start_time"]
+        ends = out.loc[idx_list, "end_time"] + pd.Timedelta(minutes=freq_minutes)
 
-            for output_col, flag_col in context_flags.items():
-                out.loc[row_index, output_col] = overlaps_any_interval(
-                    start,
-                    end,
-                    intervals_by_flag.get(flag_col, []),
-                )
-            out.loc[row_index, "in_non_full_performance_interval"] = overlaps_any_interval(
-                start,
-                end,
-                non_full_performance_intervals,
+        for output_col, flag_col in context_flags.items():
+            out.loc[idx_list, output_col] = overlaps_many_prepared_intervals(
+                starts,
+                ends,
+                bounds_by_flag.get(
+                    flag_col,
+                    (np.array([], dtype="datetime64[ns]"), np.array([], dtype="datetime64[ns]")),
+                ),
             )
-            out.loc[row_index, "in_information_environmental_buffer_interval"] = overlaps_any_interval(
-                start,
-                end,
-                information_environmental_intervals,
-            )
+        out.loc[idx_list, "in_non_full_performance_interval"] = overlaps_many_prepared_intervals(
+            starts,
+            ends,
+            non_full_performance_bounds,
+        )
+        out.loc[idx_list, "in_information_environmental_buffer_interval"] = overlaps_many_prepared_intervals(
+            starts,
+            ends,
+            information_environmental_bounds,
+        )
 
     non_operational_cols = list(context_flags.keys()) + [
         "in_non_full_performance_interval",
