@@ -15,15 +15,12 @@ from src.config.kelmarsh_config import TARGET_COLS
 from src.detection.scc import apply_scc_detection, fit_scc_thresholds
 from main_detect_residual_baseline import (
     annotate_alarm_episode_horizon_matches,
+    annotate_alarm_episode_operating_context,
     annotate_alarm_horizon_matches,
-    build_alarm_episodes,
+    build_turbine_alarm_episodes,
     build_target_event_summary,
     find_experiment,
-    informational_environmental_spec_intervals_from_status,
-    intervals_from_flag_file,
     load_prediction_file,
-    non_full_performance_intervals_from_status,
-    overlaps_any_interval,
     summarize_detection_performance,
     update_event_summary_from_alarm_episodes,
 )
@@ -47,13 +44,17 @@ def parse_range(text: str) -> list[float]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a lightweight signed-error SCC k grid."
+        description="Run a signed- or absolute-error SCC k grid."
     )
     parser.add_argument("--run-id", help="Experiment run ID. Defaults to the newest experiment.")
     parser.add_argument(
         "--k-values",
         default=default_k_values(),
         help="Comma-separated SCC k values. Defaults to 0,0.5,...,10.",
+    )
+    parser.add_argument(
+        "--residual-mode", choices=["signed_error", "absolute"],
+        default="signed_error", help="Validation-error statistics used for SCC thresholds."
     )
     parser.add_argument(
         "--horizon-days",
@@ -66,89 +67,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Recompute even when the output summary CSV already exists.",
     )
-    return parser.parse_args()
-
-
-def build_operating_context_cache(project_root: Path, turbine_ids: list[str]) -> dict[str, dict[str, object]]:
-    flags_dir = project_root / "data" / "interim" / "kelmarsh" / "flags"
-    flag_cols = ["in_manual_event", "in_event", "in_maintenance", "in_communication", "in_curtailment"]
-    cache = {}
-    for turbine_id in turbine_ids:
-        flag_path = flags_dir / f"{turbine_id.lower()}_with_flags.parquet"
-        cache[turbine_id] = {
-            "flag_intervals": intervals_from_flag_file(flag_path, flag_cols),
-            "non_full_performance": non_full_performance_intervals_from_status(
-                project_root,
-                turbine_id=turbine_id,
-            ),
-            "information_environmental": informational_environmental_spec_intervals_from_status(
-                project_root,
-                turbine_id=turbine_id,
-            ),
-        }
-    return cache
-
-
-def annotate_alarm_episode_operating_context_cached(
-    alarm_episodes: pd.DataFrame,
-    operating_context_cache: dict[str, dict[str, object]],
-) -> pd.DataFrame:
-    out = alarm_episodes.copy()
-    context_flags = {
-        "in_manual_event_interval": "in_manual_event",
-        "in_status_event_interval": "in_event",
-        "in_maintenance_interval": "in_maintenance",
-        "in_communication_interval": "in_communication",
-        "in_curtailment_interval": "in_curtailment",
-    }
-    for output_col in context_flags:
-        out[output_col] = False
-    out["in_non_full_performance_interval"] = False
-    out["in_information_environmental_buffer_interval"] = False
-    out["in_non_operational_interval"] = False
-    out["is_operational_false_alarm"] = False
-    if out.empty:
-        return out
-
-    out["start_time"] = pd.to_datetime(out["start_time"], errors="coerce")
-    out["end_time"] = pd.to_datetime(out["end_time"], errors="coerce")
-    for turbine_id, idx in out.groupby("turbine_id", sort=False).groups.items():
-        cache = operating_context_cache.get(str(turbine_id), {})
-        intervals_by_flag = cache.get("flag_intervals", {})
-        non_full_performance_intervals = cache.get("non_full_performance", [])
-        information_environmental_intervals = cache.get("information_environmental", [])
-        for row_index in idx:
-            start = out.loc[row_index, "start_time"]
-            end = out.loc[row_index, "end_time"] + pd.Timedelta(minutes=10)
-            if pd.isna(start) or pd.isna(end):
-                continue
-            for output_col, flag_col in context_flags.items():
-                out.loc[row_index, output_col] = overlaps_any_interval(
-                    start,
-                    end,
-                    intervals_by_flag.get(flag_col, []),
-                )
-            out.loc[row_index, "in_non_full_performance_interval"] = overlaps_any_interval(
-                start,
-                end,
-                non_full_performance_intervals,
-            )
-            out.loc[row_index, "in_information_environmental_buffer_interval"] = overlaps_any_interval(
-                start,
-                end,
-                information_environmental_intervals,
-            )
-
-    non_operational_cols = list(context_flags.keys()) + [
-        "in_non_full_performance_interval",
-        "in_information_environmental_buffer_interval",
-    ]
-    out["in_non_operational_interval"] = out[non_operational_cols].any(axis=1)
-    out["is_operational_false_alarm"] = (
-        ~out["in_fault_horizon"].fillna(False).astype(bool)
-        & ~out["in_non_operational_interval"].fillna(False).astype(bool)
+    parser.add_argument(
+        "--label-suffix",
+        default="",
+        help="Optional suffix appended to the output grid filename label.",
     )
-    return out
+    return parser.parse_args()
 
 
 def main() -> None:
@@ -161,10 +85,13 @@ def main() -> None:
 
     project_root = PROJECT_ROOT
     result_dir, _, metadata = find_experiment(project_root, args.run_id)
+    mode_label = "signed_meanstd_abslimit" if args.residual_mode == "signed_error" else "abs_meanstd"
     grid_label = (
-        f"signed_meanstd_abslimit_c{SCC_MIN_CONSECUTIVE}_"
+        f"{mode_label}_c{SCC_MIN_CONSECUTIVE}_"
         f"k{format_number(min(k_values))}-{format_number(max(k_values))}_step0p5"
     )
+    grid_label = f"{grid_label}_{args.label_suffix or 'split6h_no_warning'}"
+    grid_label = f"{grid_label}_turbine"
     output_path = result_dir / f"scc_grid_{grid_label}.csv"
     if output_path.exists() and not args.force:
         print("Grid summary already exists:", output_path)
@@ -183,19 +110,18 @@ def main() -> None:
         fallback_name="test_2023_2024_predictions.csv",
     )
     target_cols = metadata.get("targets", TARGET_COLS)
-    event_summary_base = build_target_event_summary(project_root, horizon_days=args.horizon_days)
-    turbine_ids = sorted(test_predictions["turbine_id"].dropna().astype(str).unique())
-    operating_context_cache = build_operating_context_cache(project_root, turbine_ids)
-
+    event_summary_base = build_target_event_summary(
+        project_root, horizon_days=args.horizon_days, include_long_warnings=False,
+    )
     rows = []
     total = len(k_values)
     for count, k in enumerate(k_values, start=1):
-        print(f"[{count}/{total}] SCC signed mean/std k={k:g}, c={SCC_MIN_CONSECUTIVE}")
+        print(f"[{count}/{total}] SCC {args.residual_mode} mean/std k={k:g}, c={SCC_MIN_CONSECUTIVE}", flush=True)
         thresholds = fit_scc_thresholds(
             val_predictions,
             target_cols=target_cols,
             k=k,
-            residual_mode="signed_error",
+            residual_mode=args.residual_mode,
         )
         detections = apply_scc_detection(
             test_predictions,
@@ -205,11 +131,12 @@ def main() -> None:
         )
         event_summary = event_summary_base.copy()
         detections = annotate_alarm_horizon_matches(detections, event_summary)
-        alarm_episodes = build_alarm_episodes(detections)
+        alarm_episodes = build_turbine_alarm_episodes(detections)
         alarm_episodes = annotate_alarm_episode_horizon_matches(alarm_episodes, event_summary)
-        alarm_episodes = annotate_alarm_episode_operating_context_cached(
-            alarm_episodes,
-            operating_context_cache,
+        alarm_episodes = annotate_alarm_episode_operating_context(
+            alarm_episodes, project_root, buffer_hours=6,
+            non_operational_rule="remaining_consecutive",
+            min_operational_consecutive=SCC_MIN_CONSECUTIVE,
         )
         event_summary = update_event_summary_from_alarm_episodes(event_summary, alarm_episodes)
         performance = summarize_detection_performance(detections, event_summary, alarm_episodes)
@@ -231,7 +158,7 @@ def main() -> None:
         rows.append(
             {
                 "run_id": metadata["run_id"],
-                "method": "scc_signed_meanstd",
+                "method": f"scc_{mode_label}",
                 "k": k,
                 "min_consecutive": SCC_MIN_CONSECUTIVE,
                 "horizon_days": args.horizon_days,
@@ -265,8 +192,12 @@ def main() -> None:
     summary = pd.DataFrame(rows)
     summary.to_csv(output_path, index=False, encoding="utf-8-sig")
     metadata.setdefault("scc_grid", {})[grid_label] = {
-        "residual_mode": "signed_error",
-        "threshold_rule": "abs(mean(validation_error) + k * std(validation_error))",
+        "residual_mode": args.residual_mode,
+        "threshold_rule": (
+            "abs(mean(validation_error) + k * std(validation_error))"
+            if args.residual_mode == "signed_error"
+            else "mean(abs(validation_error)) + k * std(abs(validation_error))"
+        ),
         "center_type": "mean",
         "scale_type": "std",
         "min_consecutive": SCC_MIN_CONSECUTIVE,

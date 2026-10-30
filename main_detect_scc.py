@@ -10,7 +10,7 @@ from main_detect_residual_baseline import (
     annotate_alarm_episode_horizon_matches,
     annotate_alarm_episode_operating_context,
     annotate_alarm_horizon_matches,
-    build_alarm_episodes,
+    build_turbine_alarm_episodes,
     build_target_event_summary,
     find_experiment,
     load_prediction_file,
@@ -29,8 +29,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--k",
         type=float,
-        default=3.0,
-        help="Control limit multiplier for abs(mean(validation error) + k * std(validation error)).",
+        default=6.0,
+        help="Control limit multiplier for the validation-error threshold.",
+    )
+    parser.add_argument(
+        "--residual-mode", choices=("absolute", "signed_error"), default="absolute",
+        help="Use absolute errors (current thesis setting) or signed validation errors.",
     )
     parser.add_argument(
         "--horizon-days",
@@ -73,7 +77,7 @@ def main() -> None:
         val_predictions,
         target_cols=target_cols,
         k=args.k,
-        residual_mode="signed_error",
+        residual_mode=args.residual_mode,
     )
     detections = apply_scc_detection(
         test_predictions,
@@ -82,7 +86,8 @@ def main() -> None:
         min_consecutive=SCC_MIN_CONSECUTIVE,
     )
 
-    suffix = f"signed_meanstd_abslimit_k{format_number(args.k)}_c{SCC_MIN_CONSECUTIVE}"
+    mode_label = "abs_meanstd" if args.residual_mode == "absolute" else "signed_meanstd_abslimit"
+    suffix = f"{mode_label}_k{format_number(args.k)}_c{SCC_MIN_CONSECUTIVE}_split6h_no_warning_turbine"
     threshold_path = result_dir / f"scc_thresholds_{suffix}.csv"
     detection_path = result_dir / f"scc_detections_{suffix}.csv"
     event_summary_path = result_dir / f"scc_event_summary_{suffix}.csv"
@@ -91,11 +96,15 @@ def main() -> None:
 
     thresholds.to_csv(threshold_path, index=False, encoding="utf-8-sig")
 
-    event_summary = build_target_event_summary(project_root, horizon_days=args.horizon_days)
+    event_summary = build_target_event_summary(project_root, horizon_days=args.horizon_days, include_long_warnings=False)
     detections = annotate_alarm_horizon_matches(detections, event_summary)
-    alarm_episodes = build_alarm_episodes(detections)
+    alarm_episodes = build_turbine_alarm_episodes(detections)
     alarm_episodes = annotate_alarm_episode_horizon_matches(alarm_episodes, event_summary)
-    alarm_episodes = annotate_alarm_episode_operating_context(alarm_episodes, project_root)
+    alarm_episodes = annotate_alarm_episode_operating_context(
+        alarm_episodes, project_root, buffer_hours=6,
+        non_operational_rule="remaining_consecutive",
+        min_operational_consecutive=SCC_MIN_CONSECUTIVE,
+    )
     event_summary = update_event_summary_from_alarm_episodes(event_summary, alarm_episodes)
     performance = summarize_detection_performance(detections, event_summary, alarm_episodes)
 
@@ -105,8 +114,12 @@ def main() -> None:
     performance_path.write_text(json.dumps(performance, indent=2), encoding="utf-8")
 
     metadata["scc_detection"] = {
-        "residual_mode": "signed_error",
-        "threshold_rule": "abs(mean(validation_error) + k * std(validation_error))",
+        "residual_mode": args.residual_mode,
+        "threshold_rule": (
+            "mean(abs(validation_error)) + k * std(abs(validation_error))"
+            if args.residual_mode == "absolute"
+            else "abs(mean(validation_error) + k * std(validation_error))"
+        ),
         "center_type": "mean",
         "scale_type": "std",
         "k": args.k,

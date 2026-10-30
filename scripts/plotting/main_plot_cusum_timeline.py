@@ -22,9 +22,8 @@ import pandas as pd
 from main_detect_residual_baseline import (
     build_target_event_summary,
     find_experiment,
-    informational_environmental_spec_intervals_from_status,
-    intervals_from_flag_file,
-    non_full_performance_intervals_from_status,
+    merge_operating_intervals,
+    operating_context_intervals,
 )
 from src.config.kelmarsh_config import TARGET_COLS
 from src.detection.residuals import resolve_prediction_column
@@ -242,27 +241,10 @@ def load_non_operation_intervals(
     plot_start = pd.Timestamp(year=year, month=1 if month == 0 else month, day=1)
     plot_end = pd.Timestamp(year=year + 1, month=1, day=1) if month == 0 else plot_start + pd.offsets.MonthBegin(1)
 
-    flag_cols = [
-        "in_manual_event",
-        "in_event",
-        "in_maintenance",
-        "in_communication",
-        "in_curtailment",
-    ]
-    flag_path = project_root / "data" / "interim" / "kelmarsh" / "flags" / f"{turbine.lower()}_with_flags.parquet"
-    intervals_by_flag = intervals_from_flag_file(flag_path, flag_cols, start_year=year, end_year=year)
-
-    intervals: list[tuple[pd.Timestamp, pd.Timestamp]] = []
-    for flag_col in flag_cols:
-        intervals.extend(intervals_by_flag.get(flag_col, []))
-    intervals.extend(non_full_performance_intervals_from_status(project_root, turbine, start_year=year, end_year=year))
-    intervals.extend(
-        informational_environmental_spec_intervals_from_status(
-            project_root,
-            turbine,
-            start_year=year,
-            end_year=year,
-            buffer_hours=informational_env_buffer_hours,
+    intervals = merge_operating_intervals(
+        operating_context_intervals(
+            project_root, turbine, buffer_hours=informational_env_buffer_hours,
+            start_year=year, end_year=year,
         )
     )
     return merge_and_clip_intervals(intervals, plot_start, plot_end)

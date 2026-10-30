@@ -19,7 +19,7 @@ from main_detect_residual_baseline import (
     annotate_alarm_episode_horizon_matches,
     annotate_alarm_episode_operating_context,
     annotate_alarm_horizon_matches,
-    build_alarm_episodes,
+    build_turbine_alarm_episodes,
     build_target_event_summary,
     find_experiment,
     load_prediction_file,
@@ -201,12 +201,12 @@ def main() -> None:
         f"k{format_number(min(k_values))}-{format_number(max(k_values))}_"
         f"h{format_number(min(h_values))}-{format_number(max(h_values))}"
     )
-    if args.label_suffix:
-        grid_label = f"{grid_label}_{args.label_suffix}"
+    grid_label = f"{grid_label}_{args.label_suffix or 'split6h_no_warning'}"
+    grid_label = f"{grid_label}_turbine"
     output_path = result_dir / f"cusum_grid_{grid_label}.csv"
-    if output_path.exists() and not args.force:
-        print("Grid summary already exists:", output_path)
-        return
+    rows = (pd.read_csv(output_path, encoding="utf-8-sig").to_dict("records")
+            if output_path.exists() and not args.force else [])
+    completed = {(float(row["k"]), float(row["h"])) for row in rows}
 
     val_predictions = load_prediction_file(
         project_root,
@@ -221,16 +221,21 @@ def main() -> None:
         fallback_name="test_2023_2024_predictions.csv",
     )
     target_cols = metadata.get("targets", TARGET_COLS)
-    event_summary_base = build_target_event_summary(project_root, horizon_days=args.horizon_days)
+    event_summary_base = build_target_event_summary(
+        project_root, horizon_days=args.horizon_days, include_long_warnings=False,
+    )
     reference_stats = fit_mean_std_reference(val_predictions, target_cols)
     prepared_groups = prepare_test_groups(test_predictions, target_cols, reference_stats)
 
-    rows = []
+    evaluation_cache = {"target_events": event_summary_base}
     total = len(k_values) * len(h_values)
     count = 0
     for k in k_values:
         for h in h_values:
             count += 1
+            if (k, h) in completed:
+                print(f"[{count}/{total}] Reusing saved k={k:g}, h={h:g}", flush=True)
+                continue
             print(
                 f"[{count}/{total}] CUSUM {args.score_mode} fixed mean/std k={k:g}, h={h:g}, no consecutive rule",
                 flush=True,
@@ -243,9 +248,14 @@ def main() -> None:
             )
             event_summary = event_summary_base.copy()
             detections = annotate_alarm_horizon_matches(detections, event_summary)
-            alarm_episodes = build_alarm_episodes(detections)
+            alarm_episodes = build_turbine_alarm_episodes(detections)
             alarm_episodes = annotate_alarm_episode_horizon_matches(alarm_episodes, event_summary)
-            alarm_episodes = annotate_alarm_episode_operating_context(alarm_episodes, project_root)
+            alarm_episodes = annotate_alarm_episode_operating_context(
+                alarm_episodes, project_root, buffer_hours=6,
+                non_operational_rule="remaining_consecutive",
+                min_operational_consecutive=1,
+                evaluation_cache=evaluation_cache,
+            )
             event_summary = update_event_summary_from_alarm_episodes(event_summary, alarm_episodes)
             performance = summarize_detection_performance(detections, event_summary, alarm_episodes)
             event_level = performance["event_level"]

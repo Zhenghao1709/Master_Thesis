@@ -18,12 +18,32 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from main_detect_residual_baseline import build_target_event_summary, find_experiment
+from main_detect_residual_baseline import (
+    annotate_alarm_episode_operating_context,
+    build_target_event_summary,
+    find_experiment,
+    fuse_alarm_episodes,
+)
 
 
 DEFAULT_RUN_ID = "all6_multi3_seq12_h64_l1_bs64_lr1e-03_wd0_do0_e60_p8_seed42"
 METHODS = ("scc", "cusum", "bcad")
 FREQ_MINUTES = 10
+
+
+def load_operational_turbine_episodes(path: Path, project_root: Path) -> pd.DataFrame:
+    episodes = fuse_alarm_episodes(pd.read_csv(path, encoding="utf-8-sig"))
+    setting = path.stem
+    match = re.search(r"(?:^|_)c(\d+)(?:_|$)", setting)
+    min_consecutive = 1 if "cusum" in setting else int(match.group(1)) if match else None
+    if min_consecutive is None:
+        raise ValueError(f"Cannot determine min_consecutive from episode file: {path}")
+    episodes = annotate_alarm_episode_operating_context(
+        episodes, project_root, buffer_hours=6,
+        non_operational_rule="remaining_consecutive",
+        min_operational_consecutive=min_consecutive,
+    )
+    return episodes.loc[~episodes["in_non_operational_interval"].fillna(False).astype(bool)].copy()
 
 
 def parse_args() -> argparse.Namespace:
@@ -353,14 +373,14 @@ def main() -> None:
             args.setting,
             horizon_days=args.horizon_days,
         )
-        episodes = pd.read_csv(path)
+        episodes = load_operational_turbine_episodes(path, project_root)
         lead_times = analyze_episode_trigger_times(episodes, events, freq_minutes=args.freq_minutes)
     elif args.method == "bcad":
         path = result_dir / f"bcad_alarm_episodes_{args.setting}.csv"
         if not path.exists():
             raise FileNotFoundError(path)
-        episodes = pd.read_csv(path)
-        trigger_col = "first_trigger_time" if "first_trigger_time" in episodes.columns else "start_time"
+        episodes = load_operational_turbine_episodes(path, project_root)
+        trigger_col = "start_time"
         lead_times = analyze_episode_trigger_times(
             episodes,
             events,
@@ -375,15 +395,15 @@ def main() -> None:
             args.setting,
             horizon_days=args.horizon_days,
         )
-        episodes = pd.read_csv(path)
+        episodes = load_operational_turbine_episodes(path, project_root)
         lead_times = analyze_episode_trigger_times(episodes, events, freq_minutes=args.freq_minutes)
 
     summary = make_summary(args.method, args.setting, lead_times, total_events=len(events))
     output_method = "cusum_episode" if args.method == "cusum" else args.method
-    out_csv = result_dir / f"{output_method}_lead_times_{args.setting}.csv"
-    out_json = result_dir / f"{output_method}_lead_time_summary_{args.setting}.json"
+    out_csv = result_dir / f"{output_method}_lead_times_{args.setting}_split6h_turbine.csv"
+    out_json = result_dir / f"{output_method}_lead_time_summary_{args.setting}_split6h_turbine.json"
     out_fig = project_root / "results" / "kelmarsh" / "figures" / "alarm_lead_times" / (
-        f"{output_method}_lead_time_{args.setting}.png"
+        f"{output_method}_lead_time_{args.setting}_split6h_turbine.png"
     )
 
     lead_times.to_csv(out_csv, index=False, encoding="utf-8-sig")

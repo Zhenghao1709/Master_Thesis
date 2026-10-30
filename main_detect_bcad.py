@@ -14,7 +14,7 @@ from main_detect_residual_baseline import (
     annotate_alarm_episode_horizon_matches,
     annotate_alarm_episode_operating_context,
     annotate_alarm_horizon_matches,
-    build_alarm_episodes,
+    build_turbine_alarm_episodes,
     build_target_event_summary,
     find_experiment,
     load_prediction_file,
@@ -23,7 +23,7 @@ from main_detect_residual_baseline import (
 )
 
 
-BCAD_MIN_CONSECUTIVE = 6
+BCAD_MIN_CONSECUTIVE = 72
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,13 +64,17 @@ def parse_args() -> argparse.Namespace:
         "--distribution",
         choices=[
             "gaussian",
+            "gaussian_abs_logscore",
             "folded_normal",
+            "folded_normal_moments_logscore",
             "folded_normal_mle_shared_center",
             "folded_normal_mle_legacy_a",
             "folded_normal_h_gaussian_a",
             "weibull_h_weibull_a_mle_calibration",
+            "weibull_h_weibull_a_mle_calibration_logscore",
             "weibull_h_weibull_a_mle_folded_calibration",
             "weibull_h_weibull_a_joint_mle_calibration",
+            "weibull_h_weibull_a_joint_mle_folded_calibration",
         ],
         default="gaussian",
         help="Likelihood distribution used for BCAD scoring.",
@@ -137,19 +141,30 @@ def ensure_point_mle_parameter_file(project_root: Path, result_dir: Path, run_id
     return path
 
 
-def ensure_folded_calibrated_weibull_parameter_file(
-    project_root: Path, result_dir: Path, run_id: str, window_size: int
-) -> Path:
-    if window_size != 72:
-        raise ValueError("Folded-calibrated Weibull parameters are currently fitted for window_size=72")
-    path = result_dir / (
-        "bcad_weibull_mle_parameters_from_foldedmle_"
-        "foldedmle_samecenterabs_w72_q990_vm5_c6_calib2021_2022.csv"
-    )
+def ensure_folded_point_mle_parameter_file(project_root: Path, result_dir: Path, run_id: str) -> Path:
+    path = result_dir / "bcad_weibull_point_mle_parameters_from_foldedmle_calib2021_2022.csv"
     if not path.exists():
         subprocess.run(
             [sys.executable, str(project_root / "scripts" / "experiments" /
-             "main_fit_bcad_weibull_from_folded_mle.py"), "--run-id", run_id],
+             "main_fit_bcad_weibull_point_from_folded_mle.py"), "--run-id", run_id],
+            cwd=project_root, check=True,
+        )
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return path
+
+
+def ensure_folded_calibrated_weibull_parameter_file(
+    project_root: Path, result_dir: Path, run_id: str, window_size: int
+) -> Path:
+    stem = ("bcad_weibull_mle_parameters_from_foldedmle_"
+            "foldedmle_samecenterabs_w72_q990_vm5_c6_calib2021_2022")
+    path = result_dir / (f"{stem}.csv" if window_size == 72 else f"{stem}_w{window_size}.csv")
+    if not path.exists():
+        subprocess.run(
+            [sys.executable, str(project_root / "scripts" / "experiments" /
+             "main_fit_bcad_weibull_from_folded_mle.py"), "--run-id", run_id,
+             "--window-size", str(window_size)],
             cwd=project_root, check=True,
         )
     if not path.exists():
@@ -185,17 +200,22 @@ def main() -> None:
     if args.abnormal_mean_multiplier is not None and args.abnormal_mean_multiplier <= 0:
         raise ValueError("--abnormal-mean-multiplier must be greater than 0")
     if args.abnormal_mean_multiplier is not None and not (
-        args.residual_mode == "absolute" and args.distribution == "gaussian"
+        args.residual_mode == "absolute"
+        and args.distribution in {"gaussian", "gaussian_abs_logscore"}
     ):
         raise ValueError("--abnormal-mean-multiplier is only supported for absolute Gaussian BCAD")
     if args.distribution in {
+        "gaussian_abs_logscore",
         "folded_normal",
+        "folded_normal_moments_logscore",
         "folded_normal_mle_shared_center",
         "folded_normal_mle_legacy_a",
         "folded_normal_h_gaussian_a",
         "weibull_h_weibull_a_mle_calibration",
+        "weibull_h_weibull_a_mle_calibration_logscore",
         "weibull_h_weibull_a_mle_folded_calibration",
         "weibull_h_weibull_a_joint_mle_calibration",
+        "weibull_h_weibull_a_joint_mle_folded_calibration",
     } and args.residual_mode != "absolute":
         raise ValueError("This distribution requires --residual-mode absolute")
     if args.horizon_days < 1:
@@ -222,7 +242,10 @@ def main() -> None:
     weibull_parameter_path = None
     folded_mle_parameters = None
     folded_mle_parameter_path = None
-    if args.distribution == "weibull_h_weibull_a_mle_calibration":
+    if args.distribution in {
+        "weibull_h_weibull_a_mle_calibration",
+        "weibull_h_weibull_a_mle_calibration_logscore",
+    }:
         weibull_parameter_path = ensure_mle_parameter_file(
             project_root,
             result_dir,
@@ -238,6 +261,11 @@ def main() -> None:
         weibull_parameters = pd.read_csv(weibull_parameter_path, encoding="utf-8-sig")
     elif args.distribution == "weibull_h_weibull_a_joint_mle_calibration":
         weibull_parameter_path = ensure_point_mle_parameter_file(
+            project_root, result_dir, metadata["run_id"]
+        )
+        weibull_parameters = pd.read_csv(weibull_parameter_path, encoding="utf-8-sig")
+    elif args.distribution == "weibull_h_weibull_a_joint_mle_folded_calibration":
+        weibull_parameter_path = ensure_folded_point_mle_parameter_file(
             project_root, result_dir, metadata["run_id"]
         )
         weibull_parameters = pd.read_csv(weibull_parameter_path, encoding="utf-8-sig")
@@ -267,10 +295,14 @@ def main() -> None:
 
     if args.distribution == "weibull_h_weibull_a_mle_calibration":
         mode_label = "weibullmle_calib2021_2022"
+    elif args.distribution == "weibull_h_weibull_a_mle_calibration_logscore":
+        mode_label = "weibullmaxlogmle_calib2021_2022"
     elif args.distribution == "weibull_h_weibull_a_mle_folded_calibration":
         mode_label = "weibullmle_foldedcalib2021_2022"
     elif args.distribution == "weibull_h_weibull_a_joint_mle_calibration":
         mode_label = "weibulljointmle_calib2021_2022"
+    elif args.distribution == "weibull_h_weibull_a_joint_mle_folded_calibration":
+        mode_label = "weibulljointmle_foldedcalib2021_2022"
     elif args.distribution == "folded_normal_mle_shared_center":
         mode_label = "foldedmle_samecenterabs"
     elif args.distribution == "folded_normal_mle_legacy_a":
@@ -279,6 +311,10 @@ def main() -> None:
         mode_label = "hybridabs"
     elif args.distribution == "folded_normal":
         mode_label = "foldedabs"
+    elif args.distribution == "folded_normal_moments_logscore":
+        mode_label = "foldedmomentslogabs"
+    elif args.distribution == "gaussian_abs_logscore":
+        mode_label = "abslog"
     else:
         mode_label = "abs" if args.residual_mode == "absolute" else "signed"
     if args.abnormal_mean_multiplier is not None:
@@ -286,8 +322,10 @@ def main() -> None:
     variance_label = (
         "" if args.distribution in {
             "weibull_h_weibull_a_mle_calibration",
+            "weibull_h_weibull_a_mle_calibration_logscore",
             "weibull_h_weibull_a_mle_folded_calibration",
             "weibull_h_weibull_a_joint_mle_calibration",
+            "weibull_h_weibull_a_joint_mle_folded_calibration",
         }
         else f"_vm{format_number(args.variance_multiplier)}"
     )
@@ -295,6 +333,7 @@ def main() -> None:
         f"{mode_label}_w{args.window_size}_q{int(args.quantile * 1000):03d}"
         f"{variance_label}_c{BCAD_MIN_CONSECUTIVE}"
     )
+    suffix = f"{suffix}_split6h_no_warning_turbine"
     threshold_path = result_dir / f"bcad_thresholds_{suffix}.csv"
     detection_path = result_dir / f"bcad_detections_{suffix}.csv"
     event_summary_path = result_dir / f"bcad_event_summary_{suffix}.csv"
@@ -303,11 +342,15 @@ def main() -> None:
 
     thresholds.to_csv(threshold_path, index=False, encoding="utf-8-sig")
 
-    event_summary = build_target_event_summary(project_root, horizon_days=args.horizon_days)
+    event_summary = build_target_event_summary(project_root, horizon_days=args.horizon_days, include_long_warnings=False)
     detections = annotate_alarm_horizon_matches(detections, event_summary)
-    alarm_episodes = build_alarm_episodes(detections)
+    alarm_episodes = build_turbine_alarm_episodes(detections)
     alarm_episodes = annotate_alarm_episode_horizon_matches(alarm_episodes, event_summary)
-    alarm_episodes = annotate_alarm_episode_operating_context(alarm_episodes, project_root)
+    alarm_episodes = annotate_alarm_episode_operating_context(
+        alarm_episodes, project_root, buffer_hours=6,
+        non_operational_rule="remaining_consecutive",
+        min_operational_consecutive=BCAD_MIN_CONSECUTIVE,
+    )
     event_summary = update_event_summary_from_alarm_episodes(event_summary, alarm_episodes)
     performance = summarize_detection_performance(detections, event_summary, alarm_episodes)
 
@@ -323,6 +366,10 @@ def main() -> None:
             "window_log_likelihood_ratio"
             if args.distribution in {
                 "weibull_h_weibull_a_joint_mle_calibration",
+                "weibull_h_weibull_a_joint_mle_folded_calibration",
+                "gaussian_abs_logscore",
+                "weibull_h_weibull_a_mle_calibration_logscore",
+                "folded_normal_moments_logscore",
                 "folded_normal_mle_shared_center",
                 "folded_normal_mle_legacy_a",
             }
@@ -333,13 +380,16 @@ def main() -> None:
         "quantile": args.quantile,
         "variance_multiplier": (
             None
-            if args.distribution == "weibull_h_weibull_a_joint_mle_calibration"
+            if args.distribution in {
+                "weibull_h_weibull_a_joint_mle_calibration",
+                "weibull_h_weibull_a_joint_mle_folded_calibration",
+            }
             else args.variance_multiplier
         ),
         "abnormal_mean_multiplier": args.abnormal_mean_multiplier,
         "min_consecutive": BCAD_MIN_CONSECUTIVE,
-        "episode_definition": "continuous is_alarm points after the c=6 rule",
-        "episode_trigger_time": "episode start (the sixth consecutive anomaly point)",
+        "episode_definition": "continuous is_alarm points after the c=72 rule; non-TA episodes split at non-operational points",
+        "episode_trigger_time": "episode start (the 72nd consecutive anomaly point)",
         "weibull_parameter_path": (
             str(weibull_parameter_path.relative_to(project_root))
             if weibull_parameter_path is not None

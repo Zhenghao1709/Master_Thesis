@@ -28,11 +28,6 @@ from main_detect_residual_baseline import (
     load_prediction_file,
     update_event_summary_from_alarm_episodes,
 )
-from main_predict_bcad_calibration import (
-    CALIBRATION_END_EXCLUSIVE,
-    CALIBRATION_START,
-    OUTPUT_NAME,
-)
 from src.config.kelmarsh_config import TARGET_COLS
 from src.detection.bcad import (
     apply_bcad_detection,
@@ -43,6 +38,11 @@ from src.detection.bcad import (
 
 
 OLD_GAUSSIAN_WINDOW = 72
+# Keep these aligned with main_predict_bcad_calibration.py without importing
+# its PyTorch-dependent prediction stack when fitting already-saved data.
+CALIBRATION_START = pd.Timestamp("2021-05-26 12:00:00")
+CALIBRATION_END_EXCLUSIVE = pd.Timestamp("2023-01-01 00:00:00")
+OUTPUT_NAME = "bcad_calibration_2021-05-26_2022_predictions.csv"
 OLD_GAUSSIAN_QUANTILE = 0.99
 OLD_GAUSSIAN_VARIANCE_MULTIPLIER = 5.0
 OLD_GAUSSIAN_MIN_CONSECUTIVE = 6

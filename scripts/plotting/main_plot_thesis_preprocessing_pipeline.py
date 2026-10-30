@@ -38,7 +38,7 @@ def add_box(
     text: str,
     facecolor: str,
     edgecolor: str,
-    fontsize: float = 9.0,
+    fontsize: float = 11.5,
     weight: str = "normal",
 ) -> None:
     patch = FancyBboxPatch(
@@ -90,202 +90,58 @@ def main() -> None:
     output_dir = project_root / "results" / "kelmarsh" / "figures" / "thesis"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(15.5, 11.2))
-    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.025, top=0.95)
+    # Keep the canvas close to the final thesis text width so labels remain
+    # readable when the vector PDF is inserted at 0.98\textwidth.
+    fig, ax = plt.subplots(figsize=(7.1, 5.7))
+    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.02, top=0.98)
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
 
-    # Raw inputs.
-    input_y, input_h = 0.865, 0.064
-    input_specs = [
-        (0.075, 0.38, "SCADA measurements\n2016–2024, six turbines"),
-        (0.545, 0.38, "Operational and event records\nstatus, manual events, and curtailment"),
-    ]
-    for x, width, text in input_specs:
-        add_box(
-            ax,
-            x,
-            input_y,
-            width,
-            input_h,
-            text,
-            COLORS["input"],
-            COLORS["input_edge"],
-            fontsize=9.0,
-            weight="semibold",
-        )
+    left_x, right_x, column_w = 0.035, 0.515, 0.45
+    add_box(
+        ax, left_x, 0.80, column_w, 0.13,
+        "SCADA measurements\nsix turbines, 2016–2024",
+        COLORS["input"], COLORS["input_edge"], weight="semibold",
+    )
+    add_box(
+        ax, right_x, 0.80, column_w, 0.13,
+        "Context records\nstatus, reviewed events\nand curtailment",
+        COLORS["input"], COLORS["input_edge"], fontsize=10.7, weight="semibold",
+    )
+    add_box(
+        ax, 0.14, 0.58, 0.72, 0.14,
+        "Align on each turbine's 10-minute timeline\ncheck signal quality; attach operating and event flags",
+        COLORS["shared"], COLORS["shared_edge"], fontsize=11.3,
+    )
+    add_arrow(ax, (0.26, 0.80), (0.40, 0.72))
+    add_arrow(ax, (0.74, 0.80), (0.60, 0.72))
 
-    # Input-specific ingestion.
-    ingest_y, ingest_h = 0.745, 0.082
     add_box(
-        ax,
-        0.055,
-        ingest_y,
-        0.40,
-        ingest_h,
-        "SCADA preparation\nSelect the required signals\nStandardise timestamps and remove duplicates",
-        COLORS["shared"],
-        COLORS["shared_edge"],
-        fontsize=8.8,
+        ax, left_x, 0.31, column_w, 0.18,
+        "Development: 2016–2022\nselect healthy continuous segments\nsplit into training and validation",
+        COLORS["development"], COLORS["development_edge"], fontsize=11.1,
     )
     add_box(
-        ax,
-        0.545,
-        ingest_y,
-        0.40,
-        ingest_h,
-        "Operational-record preparation\nClean status records and parse labelled intervals",
-        COLORS["shared"],
-        COLORS["shared_edge"],
-        fontsize=8.8,
+        ax, right_x, 0.31, column_w, 0.18,
+        "Test: 2023–2024\nretain the flagged timeline,\nincluding event-related periods",
+        COLORS["test"], COLORS["test_edge"], fontsize=11.1,
     )
-    add_arrow(ax, (0.265, input_y), (0.255, ingest_y + ingest_h))
-    add_arrow(ax, (0.735, input_y), (0.745, ingest_y + ingest_h))
+    add_arrow(ax, (0.43, 0.58), (0.26, 0.49))
+    add_arrow(ax, (0.57, 0.58), (0.74, 0.49))
 
-    # Shared timeline construction and flagging.
-    align_y, shared_h = 0.635, 0.072
     add_box(
-        ax,
-        0.19,
-        align_y,
-        0.62,
-        shared_h,
-        "Timestamp alignment on the 10-minute SCADA timeline\nAttach status, manual-event, extended fault-window, and curtailment flags",
-        COLORS["shared"],
-        COLORS["shared_edge"],
-        fontsize=9.1,
-    )
-    add_arrow(ax, (0.255, ingest_y), (0.39, align_y + shared_h))
-    add_arrow(ax, (0.745, ingest_y), (0.61, align_y + shared_h))
-
-    flags_y = 0.525
-    add_box(
-        ax,
-        0.19,
-        flags_y,
-        0.62,
-        shared_h,
-        "Quality and operating-context flags\nIdentify usable measurements, operating conditions, and event-related intervals",
-        COLORS["shared"],
-        COLORS["shared_edge"],
-        fontsize=8.8,
-    )
-    add_arrow(ax, (0.5, align_y), (0.5, flags_y + shared_h))
-
-    split_y = 0.425
-    add_box(
-        ax,
-        0.24,
-        split_y,
-        0.52,
-        0.060,
-        "Chronological role assignment: 2016–2022 development  |  2023–2024 independent test",
-        COLORS["shared"],
-        COLORS["shared_edge"],
-        fontsize=9.1,
-        weight="semibold",
-    )
-    add_arrow(ax, (0.5, flags_y), (0.5, split_y + 0.060))
-
-    # Development branch.
-    left_x, right_x = 0.025, 0.525
-    branch_w = 0.45
-    branch_header_y, branch_header_h = 0.342, 0.052
-    add_box(
-        ax,
-        left_x,
-        branch_header_y,
-        branch_w,
-        branch_header_h,
-        "Development branch: selected healthy operation",
-        COLORS["development"],
-        COLORS["development_edge"],
-        fontsize=9.3,
-        weight="semibold",
+        ax, left_x, 0.06, column_w, 0.16,
+        "Healthy train / validation sequences\n12-step inputs → next-step targets",
+        COLORS["output"], COLORS["output_edge"], fontsize=11.0,
     )
     add_box(
-        ax,
-        right_x,
-        branch_header_y,
-        branch_w,
-        branch_header_h,
-        "Test branch: complete flagged timeline",
-        COLORS["test"],
-        COLORS["test_edge"],
-        fontsize=9.3,
-        weight="semibold",
+        ax, right_x, 0.06, column_w, 0.16,
+        "Independent test sequences\nflags retained for alarm evaluation",
+        COLORS["output"], COLORS["output_edge"], fontsize=11.0,
     )
-    add_arrow(ax, (0.45, split_y), (0.25, branch_header_y + branch_header_h))
-    add_arrow(ax, (0.55, split_y), (0.75, branch_header_y + branch_header_h))
-
-    dev_boxes = [
-        (
-            0.260,
-            "Healthy-operation selection\nApply data-quality, physical-validity, and operating-context criteria",
-        ),
-        (
-            0.165,
-            "Continuous healthy-segment construction\nLinearly interpolate internal gaps within each turbine + segment only\nRemove values that remain missing after interpolation",
-        ),
-        (
-            0.070,
-            "Pooled chronological train/validation split (approximately 80:20)\nGenerate 12-step sequences: 8 inputs → 3 next-step targets",
-        ),
-    ]
-    test_boxes = [
-        (
-            0.260,
-            "Retain the complete 2023–2024 flagged timeline\nAbnormal and non-operational periods remain available",
-        ),
-        (
-            0.165,
-            "Construct continuous prediction segments\nNever construct a sequence across a time gap or turbine boundary",
-        ),
-        (
-            0.070,
-            "Generate the same 12-step input sequences\nPreserve timestamps and flags for later alarm evaluation",
-        ),
-    ]
-    box_h = 0.075
-    for x, items, face, edge in [
-        (left_x, dev_boxes, COLORS["development"], COLORS["development_edge"]),
-        (right_x, test_boxes, COLORS["test"], COLORS["test_edge"]),
-    ]:
-        for y, text in items:
-            add_box(ax, x, y, branch_w, box_h, text, face, edge, fontsize=8.25)
-        add_arrow(ax, (x + branch_w / 2, branch_header_y), (x + branch_w / 2, 0.260 + box_h))
-        add_arrow(ax, (x + branch_w / 2, 0.260), (x + branch_w / 2, 0.165 + box_h))
-        add_arrow(ax, (x + branch_w / 2, 0.165), (x + branch_w / 2, 0.070 + box_h))
-
-    # Final model-ready outputs.
-    output_y, output_h = 0.012, 0.045
-    add_box(
-        ax,
-        left_x + 0.045,
-        output_y,
-        branch_w - 0.09,
-        output_h,
-        "GRU-ready training and validation datasets",
-        COLORS["output"],
-        COLORS["output_edge"],
-        fontsize=8.8,
-        weight="semibold",
-    )
-    add_box(
-        ax,
-        right_x + 0.045,
-        output_y,
-        branch_w - 0.09,
-        output_h,
-        "Independent test sequences with evaluation context",
-        COLORS["output"],
-        COLORS["output_edge"],
-        fontsize=8.8,
-        weight="semibold",
-    )
-    add_arrow(ax, (left_x + branch_w / 2, 0.070), (left_x + branch_w / 2, output_y + output_h))
-    add_arrow(ax, (right_x + branch_w / 2, 0.070), (right_x + branch_w / 2, output_y + output_h))
+    add_arrow(ax, (0.26, 0.31), (0.26, 0.22))
+    add_arrow(ax, (0.74, 0.31), (0.74, 0.22))
 
     stem = output_dir / "kelmarsh_preprocessing_dataset_pipeline"
     output_specs = {

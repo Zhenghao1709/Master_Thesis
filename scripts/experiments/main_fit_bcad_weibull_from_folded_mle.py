@@ -20,8 +20,9 @@ from main_detect_residual_baseline import (
     load_prediction_file,
     update_event_summary_from_alarm_episodes,
 )
-from main_predict_bcad_calibration import CALIBRATION_END_EXCLUSIVE, CALIBRATION_START
 from scripts.experiments.main_fit_bcad_weibull_mle import (
+    CALIBRATION_END_EXCLUSIVE,
+    CALIBRATION_START,
     ensure_calibration_predictions,
     plot_mle_fit,
     select_true_alarm_window_max,
@@ -32,7 +33,7 @@ from src.detection.bcad import apply_bcad_detection, fit_weibull_mle, rolling_ab
 
 
 SETTING = "foldedmle_samecenterabs_w72_q990_vm5_c6"
-WINDOW_SIZE = 72
+CALIBRATION_WINDOW_SIZE = 72
 MIN_CONSECUTIVE = 6
 HORIZON_DAYS = 7
 
@@ -42,7 +43,11 @@ def main() -> None:
         description="Fit window-max Weibull H/A models from folded-normal-MLE calibration TA episodes."
     )
     parser.add_argument("--run-id", help="Experiment run ID. Defaults to the newest experiment.")
+    parser.add_argument("--window-size", type=int, default=72,
+                        help="Window size for the Weibull maxima; calibration alarms remain fixed at W=72.")
     args = parser.parse_args()
+    if args.window_size < 2:
+        raise ValueError("--window-size must be at least 2")
 
     result_dir, metadata_path, metadata = find_experiment(PROJECT_ROOT, args.run_id)
     threshold_path = result_dir / f"bcad_thresholds_{SETTING}.csv"
@@ -51,7 +56,7 @@ def main() -> None:
     thresholds = pd.read_csv(threshold_path, encoding="utf-8-sig")
     if not thresholds["distribution"].eq("folded_normal_mle_shared_center").all():
         raise ValueError("Threshold file is not the selected folded-normal-MLE setting")
-    if not thresholds["window_size"].eq(WINDOW_SIZE).all():
+    if not thresholds["window_size"].eq(CALIBRATION_WINDOW_SIZE).all():
         raise ValueError("Unexpected calibration window size")
 
     target_cols = metadata.get("targets", TARGET_COLS)
@@ -61,32 +66,35 @@ def main() -> None:
     calibration_path = ensure_calibration_predictions(PROJECT_ROOT, metadata["run_id"], result_dir)
     calibration = pd.read_csv(calibration_path, encoding="utf-8-sig")
 
-    detections = apply_bcad_detection(
-        calibration, thresholds=thresholds, target_cols=target_cols,
-        min_consecutive=MIN_CONSECUTIVE,
-    )
-    events = build_target_event_summary(
-        PROJECT_ROOT,
-        horizon_days=HORIZON_DAYS,
-        evaluation_start=CALIBRATION_START,
-        evaluation_end_exclusive=CALIBRATION_END_EXCLUSIVE,
-    )
-    detections = annotate_alarm_horizon_matches(detections, events)
-    episodes = build_alarm_episodes(detections)
-    episodes = annotate_alarm_episode_horizon_matches(episodes, events)
-    events = update_event_summary_from_alarm_episodes(events, episodes)
-
     stem = f"foldedmle_{SETTING}_calib2021_2022"
     episode_path = result_dir / f"bcad_calibration_ta_episodes_{stem}.csv"
     event_path = result_dir / f"bcad_calibration_event_summary_{stem}.csv"
-    episodes.to_csv(episode_path, index=False, encoding="utf-8-sig")
-    events.to_csv(event_path, index=False, encoding="utf-8-sig")
+    if episode_path.exists() and event_path.exists():
+        episodes = pd.read_csv(episode_path, encoding="utf-8-sig")
+        events = pd.read_csv(event_path, encoding="utf-8-sig")
+    else:
+        detections = apply_bcad_detection(
+            calibration, thresholds=thresholds, target_cols=target_cols,
+            min_consecutive=MIN_CONSECUTIVE,
+        )
+        events = build_target_event_summary(
+            PROJECT_ROOT,
+            horizon_days=HORIZON_DAYS,
+            evaluation_start=CALIBRATION_START,
+            evaluation_end_exclusive=CALIBRATION_END_EXCLUSIVE,
+        )
+        detections = annotate_alarm_horizon_matches(detections, events)
+        episodes = build_alarm_episodes(detections)
+        episodes = annotate_alarm_episode_horizon_matches(episodes, events)
+        events = update_event_summary_from_alarm_episodes(events, episodes)
+        episodes.to_csv(episode_path, index=False, encoding="utf-8-sig")
+        events.to_csv(event_path, index=False, encoding="utf-8-sig")
 
     rows = []
     figure_paths = []
     for target in target_cols:
-        healthy = rolling_absolute_error_max(validation, target, WINDOW_SIZE)["window_max"]
-        calibration_maxima = rolling_absolute_error_max(calibration, target, WINDOW_SIZE)
+        healthy = rolling_absolute_error_max(validation, target, args.window_size)["window_max"]
+        calibration_maxima = rolling_absolute_error_max(calibration, target, args.window_size)
         abnormal = select_true_alarm_window_max(calibration_maxima, episodes)
         if abnormal.empty:
             raise ValueError(f"No calibration true-alarm window maxima for target: {target}")
@@ -98,7 +106,7 @@ def main() -> None:
             "calibration_setting": SETTING,
             "calibration_start": CALIBRATION_START,
             "calibration_end_exclusive": CALIBRATION_END_EXCLUSIVE,
-            "window_size": WINDOW_SIZE,
+            "window_size": args.window_size,
             "fit_method": "scipy.stats.weibull_min.fit with floc=0",
             "healthy_source": "healthy validation prediction window-max absolute residual",
             "abnormal_source": "folded-normal-MLE TA episode window-max absolute residual",
@@ -115,19 +123,25 @@ def main() -> None:
         })
         figure_path = (
             PROJECT_ROOT / "results" / "kelmarsh" / "figures" / "bcad_distribution_fits"
-            / f"bcad_weibull_mle_from_foldedmle_w{WINDOW_SIZE}_{slugify(target)}.png"
+            / f"bcad_weibull_mle_from_foldedmle_w{args.window_size}_{slugify(target)}.png"
         )
         plot_mle_fit(
             target, healthy, abnormal,
             healthy_shape, healthy_scale, abnormal_shape, abnormal_scale,
-            WINDOW_SIZE, figure_path, selection_label="folded-normal MLE TA episodes",
+            args.window_size, figure_path, selection_label="folded-normal MLE TA episodes",
         )
         figure_paths.append(str(figure_path.relative_to(PROJECT_ROOT)))
 
-    parameter_path = result_dir / f"bcad_weibull_mle_parameters_from_{stem}.csv"
+    parameter_name = (
+        f"bcad_weibull_mle_parameters_from_{stem}.csv"
+        if args.window_size == CALIBRATION_WINDOW_SIZE
+        else f"bcad_weibull_mle_parameters_from_{stem}_w{args.window_size}.csv"
+    )
+    parameter_path = result_dir / parameter_name
     parameters = pd.DataFrame(rows)
     parameters.to_csv(parameter_path, index=False, encoding="utf-8-sig")
-    metadata.setdefault("bcad_calibration", {})[f"weibull_mle_from_{SETTING}"] = {
+    metadata_key = f"weibull_mle_from_{SETTING}_w{args.window_size}"
+    metadata.setdefault("bcad_calibration", {})[metadata_key] = {
         "parameter_path": str(parameter_path.relative_to(PROJECT_ROOT)),
         "alarm_episode_path": str(episode_path.relative_to(PROJECT_ROOT)),
         "event_summary_path": str(event_path.relative_to(PROJECT_ROOT)),

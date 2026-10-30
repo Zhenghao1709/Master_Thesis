@@ -14,8 +14,8 @@ def fit_scc_thresholds(
 ) -> pd.DataFrame:
     if k < 0:
         raise ValueError("k must be non-negative")
-    if residual_mode != "signed_error":
-        raise ValueError("Only signed-error SCC is currently implemented.")
+    if residual_mode not in {"signed_error", "absolute"}:
+        raise ValueError("SCC residual_mode must be 'signed_error' or 'absolute'.")
 
     rows = []
     for target_col in target_cols:
@@ -24,8 +24,9 @@ def fit_scc_thresholds(
         if errors.empty:
             raise ValueError(f"No error values found for target: {target_col}")
 
-        center = float(errors.mean())
-        scale = float(errors.std(ddof=0))
+        fit_values = errors.abs() if residual_mode == "absolute" else errors
+        center = float(fit_values.mean())
+        scale = float(fit_values.std(ddof=0))
         rows.append(
             {
                 "target": target_col,
@@ -37,7 +38,7 @@ def fit_scc_thresholds(
                 "center": center,
                 "scale": scale,
                 "k": float(k),
-                "threshold": abs(center + float(k) * scale),
+                "threshold": (center + float(k) * scale) if residual_mode == "absolute" else abs(center + float(k) * scale),
                 "validation_samples": int(len(errors)),
             }
         )

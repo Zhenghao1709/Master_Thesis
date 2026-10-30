@@ -10,7 +10,7 @@ from main_detect_residual_baseline import (
     annotate_alarm_episode_horizon_matches,
     annotate_alarm_episode_operating_context,
     annotate_alarm_horizon_matches,
-    build_alarm_episodes,
+    build_turbine_alarm_episodes,
     build_target_event_summary,
     find_experiment,
     load_prediction_file,
@@ -131,6 +131,7 @@ def main() -> None:
     )
     if args.episode_merge_gap_hours > 0:
         suffix = f"{suffix}_gap{format_number(args.episode_merge_gap_hours)}h"
+    suffix = f"{suffix}_split6h_no_warning_turbine"
     threshold_path = result_dir / f"cusum_thresholds_{suffix}.csv"
     detection_path = result_dir / f"cusum_detections_{suffix}.csv"
     event_summary_path = result_dir / f"cusum_event_summary_{suffix}.csv"
@@ -139,14 +140,18 @@ def main() -> None:
 
     reference_stats.to_csv(threshold_path, index=False, encoding="utf-8-sig")
 
-    event_summary = build_target_event_summary(project_root, horizon_days=args.horizon_days)
+    event_summary = build_target_event_summary(project_root, horizon_days=args.horizon_days, include_long_warnings=False)
     detections = annotate_alarm_horizon_matches(detections, event_summary)
-    alarm_episodes = build_alarm_episodes(
+    alarm_episodes = build_turbine_alarm_episodes(
         detections,
         merge_gap_hours=args.episode_merge_gap_hours,
     )
     alarm_episodes = annotate_alarm_episode_horizon_matches(alarm_episodes, event_summary)
-    alarm_episodes = annotate_alarm_episode_operating_context(alarm_episodes, project_root)
+    alarm_episodes = annotate_alarm_episode_operating_context(
+        alarm_episodes, project_root, buffer_hours=6,
+        non_operational_rule="remaining_consecutive",
+        min_operational_consecutive=CUSUM_MIN_CONSECUTIVE,
+    )
     event_summary = update_event_summary_from_alarm_episodes(event_summary, alarm_episodes)
     performance = summarize_detection_performance(detections, event_summary, alarm_episodes)
 

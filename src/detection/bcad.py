@@ -27,19 +27,25 @@ def _bcad_scores_for_series(
     abnormal_scale = scale if abnormal_scale is None else abnormal_scale
     abnormal_std = abnormal_scale * np.sqrt(variance_multiplier)
 
-    if distribution == "gaussian":
+    if distribution in {"gaussian", "gaussian_abs_logscore"}:
         deviation_sq = (values - center) ** 2
         abnormal_deviation_sq = (values - abnormal_center) ** 2
         rolling_h_ss = deviation_sq.rolling(window=window_size, min_periods=window_size).sum()
         rolling_a_ss = abnormal_deviation_sq.rolling(window=window_size, min_periods=window_size).sum()
         constant = window_size * np.log(abnormal_std / healthy_std)
         log_h_minus_log_a = -0.5 * rolling_h_ss / (healthy_std**2) + 0.5 * rolling_a_ss / (abnormal_std**2) + constant
+        if distribution == "gaussian_abs_logscore":
+            return -log_h_minus_log_a
     elif distribution in {
-        "folded_normal", "folded_normal_mle_shared_center", "folded_normal_mle_legacy_a"
+        "folded_normal", "folded_normal_moments_logscore",
+        "folded_normal_mle_shared_center", "folded_normal_mle_legacy_a"
     }:
         log_h = _folded_normal_logpdf(values, center, healthy_std)
         log_a = _folded_normal_logpdf(values, abnormal_center, abnormal_std)
-        if distribution in {"folded_normal_mle_shared_center", "folded_normal_mle_legacy_a"}:
+        if distribution in {
+            "folded_normal_moments_logscore", "folded_normal_mle_shared_center",
+            "folded_normal_mle_legacy_a",
+        }:
             return (log_a - log_h).rolling(window=window_size, min_periods=window_size).sum()
         log_h_minus_log_a = (log_h - log_a).rolling(
             window=window_size,
@@ -57,7 +63,10 @@ def _bcad_scores_for_series(
             raise ValueError("Weibull H distribution requires healthy_weibull_shape and healthy_weibull_scale")
         if weibull_shape is None or weibull_scale is None:
             raise ValueError("Weibull A distribution requires weibull_shape and weibull_scale")
-        if distribution == "weibull_h_weibull_a_joint_mle_calibration":
+        if distribution in {
+            "weibull_h_weibull_a_joint_mle_calibration",
+            "weibull_h_weibull_a_joint_mle_folded_calibration",
+        }:
             point_log_ratio = _weibull_logpdf(
                 values, shape=weibull_shape, scale=weibull_scale
             ) - _weibull_logpdf(
@@ -68,6 +77,8 @@ def _bcad_scores_for_series(
         log_h_minus_log_a = _weibull_logpdf(
             window_max, shape=healthy_weibull_shape, scale=healthy_weibull_scale
         ) - _weibull_logpdf(window_max, shape=weibull_shape, scale=weibull_scale)
+        if distribution == "weibull_h_weibull_a_mle_calibration_logscore":
+            return -log_h_minus_log_a
     else:
         raise ValueError(f"Unsupported BCAD distribution: {distribution}")
 
@@ -78,8 +89,10 @@ def _bcad_scores_for_series(
 def _is_weibull_h_weibull_a_distribution(distribution: str) -> bool:
     return distribution in {
         "weibull_h_weibull_a_mle_calibration",
+        "weibull_h_weibull_a_mle_calibration_logscore",
         "weibull_h_weibull_a_mle_folded_calibration",
         "weibull_h_weibull_a_joint_mle_calibration",
+        "weibull_h_weibull_a_joint_mle_folded_calibration",
     }
 
 
@@ -284,31 +297,42 @@ def fit_bcad_thresholds(
         raise ValueError("residual_mode must be 'signed_error' or 'absolute'")
     if distribution not in {
         "gaussian",
+        "gaussian_abs_logscore",
         "folded_normal",
+        "folded_normal_moments_logscore",
         "folded_normal_mle_shared_center",
         "folded_normal_mle_legacy_a",
         "folded_normal_h_gaussian_a",
         "weibull_h_weibull_a_mle_calibration",
+        "weibull_h_weibull_a_mle_calibration_logscore",
         "weibull_h_weibull_a_mle_folded_calibration",
         "weibull_h_weibull_a_joint_mle_calibration",
+        "weibull_h_weibull_a_joint_mle_folded_calibration",
     }:
         raise ValueError(
-            "distribution must be 'gaussian', 'folded_normal', "
+            "distribution must be 'gaussian', 'gaussian_abs_logscore', 'folded_normal', "
+            "'folded_normal_moments_logscore', "
             "'folded_normal_mle_shared_center', "
             "'folded_normal_mle_legacy_a', "
             "'folded_normal_h_gaussian_a', or "
             "'weibull_h_weibull_a_mle_calibration', "
+            "'weibull_h_weibull_a_mle_calibration_logscore', "
             "'weibull_h_weibull_a_mle_folded_calibration', or "
-            "'weibull_h_weibull_a_joint_mle_calibration'"
+            "'weibull_h_weibull_a_joint_mle_calibration', or "
+            "'weibull_h_weibull_a_joint_mle_folded_calibration'"
         )
     if distribution in {
+        "gaussian_abs_logscore",
         "folded_normal",
+        "folded_normal_moments_logscore",
         "folded_normal_mle_shared_center",
         "folded_normal_mle_legacy_a",
         "folded_normal_h_gaussian_a",
         "weibull_h_weibull_a_mle_calibration",
+        "weibull_h_weibull_a_mle_calibration_logscore",
         "weibull_h_weibull_a_mle_folded_calibration",
         "weibull_h_weibull_a_joint_mle_calibration",
+        "weibull_h_weibull_a_joint_mle_folded_calibration",
     } and residual_mode != "absolute":
         raise ValueError("This BCAD distribution requires residual_mode='absolute'")
     if abnormal_mean_multiplier is not None and abnormal_mean_multiplier <= 0:
@@ -331,7 +355,7 @@ def fit_bcad_thresholds(
         if abs_scale == 0 or np.isnan(abs_scale):
             raise ValueError(f"Validation absolute error std is zero or NaN for target: {target_col}")
 
-        if residual_mode == "absolute" and distribution == "gaussian":
+        if residual_mode == "absolute" and distribution in {"gaussian", "gaussian_abs_logscore"}:
             center = abs_center
             scale = abs_scale
             abnormal_center = (
@@ -380,7 +404,10 @@ def fit_bcad_thresholds(
             weibull_scale = float(parameter_row["weibull_scale"])
             sample_type = (
                 "point_abs_error"
-                if distribution == "weibull_h_weibull_a_joint_mle_calibration"
+                if distribution in {
+                    "weibull_h_weibull_a_joint_mle_calibration",
+                    "weibull_h_weibull_a_joint_mle_folded_calibration",
+                }
                 else "window_max"
             )
             abnormal_center_type = f"weibull_shape_mle_from_calibration_true_alarm_{sample_type}"
@@ -405,6 +432,10 @@ def fit_bcad_thresholds(
                     "window_log_likelihood_ratio"
                     if distribution in {
                         "weibull_h_weibull_a_joint_mle_calibration",
+                        "weibull_h_weibull_a_joint_mle_folded_calibration",
+                        "gaussian_abs_logscore",
+                        "weibull_h_weibull_a_mle_calibration_logscore",
+                        "folded_normal_moments_logscore",
                         "folded_normal_mle_shared_center",
                         "folded_normal_mle_legacy_a",
                     }
@@ -413,7 +444,10 @@ def fit_bcad_thresholds(
                 "distribution": distribution,
                 "center_type": (
                     "weibull_shape_mle_from_validation_point_abs_error"
-                    if distribution == "weibull_h_weibull_a_joint_mle_calibration"
+                    if distribution in {
+                        "weibull_h_weibull_a_joint_mle_calibration",
+                        "weibull_h_weibull_a_joint_mle_folded_calibration",
+                    }
                     else (
                         "folded_normal_mle_center"
                         if distribution in {"folded_normal_mle_shared_center", "folded_normal_mle_legacy_a"}
@@ -422,7 +456,10 @@ def fit_bcad_thresholds(
                 ),
                 "scale_type": (
                     "weibull_scale_mle_from_validation_point_abs_error"
-                    if distribution == "weibull_h_weibull_a_joint_mle_calibration"
+                    if distribution in {
+                        "weibull_h_weibull_a_joint_mle_calibration",
+                        "weibull_h_weibull_a_joint_mle_folded_calibration",
+                    }
                     else (
                         "folded_normal_mle_scale"
                         if distribution in {"folded_normal_mle_shared_center", "folded_normal_mle_legacy_a"}
@@ -443,7 +480,10 @@ def fit_bcad_thresholds(
                 "window_size": int(window_size),
                 "variance_multiplier": (
                     np.nan
-                    if distribution == "weibull_h_weibull_a_joint_mle_calibration"
+                    if distribution in {
+                        "weibull_h_weibull_a_joint_mle_calibration",
+                        "weibull_h_weibull_a_joint_mle_folded_calibration",
+                    }
                     else float(variance_multiplier)
                 ),
                 "threshold_quantile": float(quantile),

@@ -39,7 +39,8 @@ def main() -> None:
     study_start = pd.Timestamp("2016-01-01")
     test_start = pd.Timestamp("2023-01-01")
     study_end = pd.Timestamp("2025-01-01")
-    fig, ax = plt.subplots(figsize=(12.2, 3.8))
+    # Match the thesis text width more closely so labels remain legible after insertion.
+    fig, ax = plt.subplots(figsize=(7.1, 2.21))
     sections = [
         (study_start, split_time, TRAIN_COLOR),
         (split_time, test_start, VALIDATION_COLOR),
@@ -60,20 +61,20 @@ def main() -> None:
     ax.axvline(test_start, color="#333333", linewidth=1.4, zorder=5)
 
     ax.annotate(
-        "Healthy model-development\ndata",
+        "Healthy development\ndata",
         xy=(mdates.date2num(pd.Timestamp("2019-01-01")), 0.48),
         ha="center",
         va="bottom",
-        fontsize=10,
+        fontsize=10.5,
         fontweight="semibold",
         color="#333333",
     )
     ax.annotate(
-        "Independent full-timeline\nevaluation",
+        "Independent test\nperiod",
         xy=(mdates.date2num(pd.Timestamp("2024-01-01")), 0.48),
         ha="center",
         va="bottom",
-        fontsize=10,
+        fontsize=10.5,
         fontweight="semibold",
         color="#333333",
     )
@@ -92,8 +93,8 @@ def main() -> None:
     ax.set_ylabel("")
 
     legend_handles = [
-        mpatches.Patch(color=TRAIN_COLOR, label="Training: selected healthy observations"),
-        mpatches.Patch(color=VALIDATION_COLOR, label="Validation: selected healthy observations"),
+        mpatches.Patch(color=TRAIN_COLOR, label="Training: healthy observations"),
+        mpatches.Patch(color=VALIDATION_COLOR, label="Validation: healthy observations"),
         mpatches.Patch(color=TEST_COLOR, label="Test: full timeline with QC flags"),
     ]
     ax.legend(
@@ -102,7 +103,7 @@ def main() -> None:
         bbox_to_anchor=(0.5, -0.36),
         ncol=3,
         frameon=False,
-        fontsize=9.2,
+        fontsize=8.8,
     )
     for spine in ("top", "right", "left"):
         ax.spines[spine].set_visible(False)
